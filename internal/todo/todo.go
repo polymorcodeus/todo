@@ -294,6 +294,56 @@ func Complete(todoPath, notesDir, ref string, clear bool) (string, string, error
 	return writeUpdated(todoPath, header, tasks, idx, notesDir)
 }
 
+// Release returns a picked-up task to open and drops its claimed date. It only
+// accepts an in-progress task and returns the resulting line plus the full
+// path of its companion note, if any.
+func Release(todoPath, notesDir, ref string) (string, string, error) {
+	tasks, header, err := parseTodoFile(todoPath)
+	if err != nil {
+		return "", "", fmt.Errorf("read todo file: %w", err)
+	}
+
+	idx, err := findTaskIndex(tasks, ref)
+	if err != nil {
+		return "", "", err
+	}
+
+	if tasks[idx].Status != StatusInProgress {
+		return "", "", fmt.Errorf("cannot release %s: task is %s", tasks[idx].ID, describeStatus(tasks[idx].Status))
+	}
+
+	tasks[idx].Status = StatusOpen
+	tasks[idx].Claimed = ""
+	return writeUpdated(todoPath, header, tasks, idx, notesDir)
+}
+
+// Remove deletes the referenced task line regardless of its status and returns
+// the removed line (unchanged) plus the full path of its companion note, if any.
+func Remove(todoPath, notesDir, ref string) (string, string, error) {
+	tasks, header, err := parseTodoFile(todoPath)
+	if err != nil {
+		return "", "", fmt.Errorf("read todo file: %w", err)
+	}
+
+	idx, err := findTaskIndex(tasks, ref)
+	if err != nil {
+		return "", "", err
+	}
+
+	note, exists := NotePath(notesDir, tasks[idx].ID)
+	if !exists {
+		note = ""
+	}
+
+	line := tasks[idx].String()
+	tasks = append(tasks[:idx], tasks[idx+1:]...)
+	header.lastUpdated = now().Format("2006-01-02T15:04")
+	if err := writeTodoFile(todoPath, header, tasks); err != nil {
+		return "", note, fmt.Errorf("write todo file: %w", err)
+	}
+	return line, note, nil
+}
+
 // writeUpdated persists tasks after a status change and returns the updated
 // line and note for the task at idx.
 func writeUpdated(todoPath string, header header, tasks []Task, idx int, notesDir string) (string, string, error) {

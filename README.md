@@ -35,9 +35,11 @@ todo list --state open                      # filter by status: open|progress|do
 todo list --stale 5                         # only claimed tasks older than 5 days
 todo list --json                            # machine-readable JSON output
 todo pickup TSK-001                         # mark a task in progress (adds claimed date)
+todo release TSK-001                        # release a picked-up task back to open (drop claim)
 todo complete TSK-001                       # mark a task done (drops claimed)
 todo complete --clear TSK-001               # remove the task line entirely
 todo complete --park TSK-001                # done + print the companion note path
+todo remove TSK-001                         # remove a task line by ref (any status, e.g. [x])
 ```
 
 Task references accept `TSK-001`, `TSK-001`, `001`, `1`, or `#1`.
@@ -46,7 +48,9 @@ State rules:
 
 - `pickup` only works on an open `[ ]` task.
 - `complete` only works on an in-progress `[o]` task (i.e. one you picked up).
-- `pickup` records the `claimed:` date; `complete` drops it.
+- `release` also only works on an in-progress `[o]` task; it returns it to `[ ]` and drops the claim.
+- `remove` works on any status line (including `[x]` done lines) and deletes it.
+- `pickup` records the `claimed:` date; `complete`/`release` drop it.
 
 ## Data layout
 

@@ -539,3 +539,90 @@ func TestRoundTripWithClaimed(t *testing.T) {
 		t.Errorf("round trip = %+v, want %+v", got, tt)
 	}
 }
+
+func TestRelease(t *testing.T) {
+	claimed := time.Date(2026, 8, 18, 10, 30, 0, 0, time.UTC)
+	setNow(func() time.Time { return claimed })
+	defer setNow(time.Now)
+
+	todoPath, notesDir := writeTestTodo(t, sampleTasks)
+	// Give TSK-002 an in-progress claim to release.
+	tasks := readTasks(t, todoPath)
+	tasks[1].Claimed = "2026-08-10"
+	_ = writeTodoFile(todoPath, header{project: "test", repo: "http://example.com/repo", lastUpdated: "2026-01-01T00:00", configured: "2026-01-01", legacySource: "none"}, tasks)
+
+	line, _, err := Release(todoPath, notesDir, "TSK-002")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(line, "- [ ] [TSK-002]") {
+		t.Errorf("release line = %q, want open [ ] TSK-002", line)
+	}
+	if strings.Contains(line, "claimed") {
+		t.Errorf("release line still has claimed: %q", line)
+	}
+
+	after := readTasks(t, todoPath)
+	if after[1].Status != StatusOpen || after[1].Claimed != "" {
+		t.Errorf("task after release = %q, want open with no claim", after[1].String())
+	}
+}
+
+func TestReleaseInvalid(t *testing.T) {
+	todoPath, notesDir := writeTestTodo(t, sampleTasks)
+	// Open and done tasks cannot be released.
+	if _, _, err := Release(todoPath, notesDir, "1"); err == nil {
+		t.Error("release of open task: expected error")
+	}
+	if _, _, err := Release(todoPath, notesDir, "3"); err == nil {
+		t.Error("release of done task: expected error")
+	}
+	tasks := readTasks(t, todoPath)
+	if tasks[0].Status != StatusOpen || tasks[2].Status != StatusDone {
+		t.Error("failed release mutated state")
+	}
+}
+
+func TestRemove(t *testing.T) {
+	todoPath, notesDir := writeTestTodo(t, sampleTasks)
+
+	// Remove a done task line - the [x] -> removed path.
+	line, _, err := Remove(todoPath, notesDir, "TSK-003")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(line, "- [x] [TSK-003]") {
+		t.Errorf("removed line = %q, want original TSK-003 line", line)
+	}
+
+	tasks := readTasks(t, todoPath)
+	if len(tasks) != 2 {
+		t.Fatalf("tasks after remove = %d, want 2", len(tasks))
+	}
+	for _, tt := range tasks {
+		if tt.ID == "TSK-003" {
+			t.Errorf("TSK-003 still present after remove: %v", tasks)
+		}
+	}
+}
+
+func TestRemoveAnyStatus(t *testing.T) {
+	todoPath, notesDir := writeTestTodo(t, sampleTasks)
+	// Remove an open and an in-progress task; all statuses should work.
+	for _, ref := range []string{"TSK-001", "TSK-002"} {
+		if _, _, err := Remove(todoPath, notesDir, ref); err != nil {
+			t.Fatalf("remove %s: %v", ref, err)
+		}
+	}
+	tasks := readTasks(t, todoPath)
+	if len(tasks) != 1 || tasks[0].ID != "TSK-003" {
+		t.Errorf("after multi-remove = %+v, want only TSK-003", tasks)
+	}
+}
+
+func TestRemoveNotFound(t *testing.T) {
+	todoPath, notesDir := writeTestTodo(t, sampleTasks)
+	if _, _, err := Remove(todoPath, notesDir, "999"); err == nil {
+		t.Error("remove of missing task: expected error")
+	}
+}

@@ -356,6 +356,47 @@ func Run() {
 					return nil
 				},
 			},
+			{
+				Name:      "release",
+				Usage:     "release a picked-up task back to open (drop its claim)",
+				ArgsUsage: "<task>",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					ref := strings.TrimSpace(cmd.Args().First())
+					if ref == "" {
+						return exitError(errors.New("task number required: e.g. todo release TSK-001"))
+					}
+					line, note, err := todo.Release(todoPath, notesDir, ref)
+					if err != nil {
+						return exitError(err)
+					}
+					fmt.Println(line)
+					if note != "" {
+						fmt.Println("note:", note)
+					}
+					return nil
+				},
+			},
+			{
+				Name:      "remove",
+				Aliases:   []string{"rm"},
+				Usage:     "remove a task line by reference (any status)",
+				ArgsUsage: "<task>",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					ref := strings.TrimSpace(cmd.Args().First())
+					if ref == "" {
+						return exitError(errors.New("task number required: e.g. todo remove TSK-001"))
+					}
+					line, note, err := todo.Remove(todoPath, notesDir, ref)
+					if err != nil {
+						return exitError(err)
+					}
+					fmt.Println(line)
+					if note != "" {
+						fmt.Println("note:", note)
+					}
+					return nil
+				},
+			},
 			func() *cli.Command {
 				var clear, park bool
 				return &cli.Command{
