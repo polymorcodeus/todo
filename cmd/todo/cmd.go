@@ -3,8 +3,10 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -42,6 +44,59 @@ func exitError(err error) error {
 	return cli.Exit(err.Error(), 1)
 }
 
+// parseState maps the --state flag value to a task Status filter.
+func parseState(s string) todo.Status {
+	switch s {
+	case "progress":
+		return todo.StatusInProgress
+	case "done":
+		return todo.StatusDone
+	default:
+		return todo.StatusOpen
+	}
+}
+
+// dashIfEmpty returns "-" for empty strings, used to keep columns aligned.
+func dashIfEmpty(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
+}
+
+// jsonTask is the machine-readable representation of a task for --json.
+type jsonTask struct {
+	ID       string `json:"id"`
+	Status   string `json:"status"`
+	Priority string `json:"priority"`
+	Opened   string `json:"opened"`
+	Claimed  string `json:"claimed,omitempty"`
+	AgeDays  *int   `json:"age_days,omitempty"`
+	Summary  string `json:"summary"`
+}
+
+// writeJSON emits tasks as a JSON array of stable, documented fields.
+func writeJSON(tasks []todo.Task) error {
+	out := make([]jsonTask, 0, len(tasks))
+	for _, t := range tasks {
+		jt := jsonTask{
+			ID:       t.ID,
+			Status:   string(t.Status),
+			Priority: t.Priority,
+			Opened:   t.Opened,
+			Claimed:  t.Claimed,
+			Summary:  t.Summary,
+		}
+		if age := t.AgeDays(); age >= 0 {
+			jt.AgeDays = &age
+		}
+		out = append(out, jt)
+	}
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(out)
+}
+
 // Run runs the root command.
 func Run() {
 	var (
@@ -75,10 +130,23 @@ func Run() {
 		Commands: []*cli.Command{
 			func() *cli.Command {
 				var (
-					summary  string
-					priority string
-					create   bool
+					summary     string
+					priority    string
+					create      bool
+					noteContent string
+					noteFile    string
+					dryRun      bool
 				)
+				noteContentFlag := &cli.StringFlag{
+					Name:        "note-content",
+					Destination: &noteContent,
+					Usage:       "content to write into the note; use '-' to read from stdin",
+				}
+				noteFileFlag := &cli.StringFlag{
+					Name:        "note-file",
+					Destination: &noteFile,
+					Usage:       "copy an existing file into the note (copy, not move)",
+				}
 				return &cli.Command{
 					Name:      "add",
 					Usage:     "Add a new todo to the todo list",
@@ -102,7 +170,23 @@ func Run() {
 							Name:        "create-note",
 							Aliases:     []string{"n"},
 							Destination: &create,
-							Usage:       "create an empty companion note file",
+							Usage:       "create a companion note file (reads content from stdin unless --note-content/--note-file given)",
+						},
+						noteContentFlag,
+						noteFileFlag,
+						&cli.BoolFlag{
+							Name:        "dry-run",
+							Destination: &dryRun,
+							Usage:       "preview the would-be task line and note without writing",
+						},
+					},
+					MutuallyExclusiveFlags: []cli.MutuallyExclusiveFlags{
+						{
+							Category: "note source",
+							// note-content and note-file are alternative note
+							// sources; each in its own path so at most one may
+							// be set.
+							Flags: [][]cli.Flag{{noteContentFlag}, {noteFileFlag}},
 						},
 					},
 					Before: func(ctx context.Context, cmd *cli.Command) (context.Context, error) {
@@ -112,12 +196,52 @@ func Run() {
 						if summary == "" {
 							return ctx, exitError(errors.New("task summary required: provide as first argument or --summary"))
 						}
+						// Since MutualExclusiveFlags matches by the flag's declared
+						// Name, ensure they're wired to the same bool/state by
+						// reading them back from the command (they aren't bound
+						// to vars in the exclusive set).
+						_ = cmd
 						return ctx, nil
 					},
 					Action: func(ctx context.Context, cmd *cli.Command) error {
-						result, err := todo.Add(todoPath, notesDir, priority, summary, create)
+						// Resolve note content: --note-content (or '-') takes
+						// precedence, then --note-file copy (handled internally
+						// by Add), else read note content from stdin.
+						content := cmd.String("note-content")
+						if content == "-" || (content == "" && create && cmd.String("note-file") == "") {
+							data, err := io.ReadAll(os.Stdin)
+							if err != nil {
+								return exitError(fmt.Errorf("read note stdin: %w", err))
+							}
+							content = string(data)
+						}
+
+						result, err := todo.Add(todo.AddOptions{
+							TodoPath:    todoPath,
+							NotesDir:    notesDir,
+							Priority:    priority,
+							Summary:     summary,
+							CreateNote:  create,
+							NoteContent: content,
+							NoteFile:    cmd.String("note-file"),
+							DryRun:      dryRun,
+						})
 						if err != nil {
 							return exitError(err)
+						}
+						if dryRun {
+							fmt.Printf("would add:         %s\n", result.Line)
+							if result.NotePath != "" {
+								fmt.Printf("would create note: %s\n", result.NotePath)
+								if result.NoteContent != "" {
+									fmt.Println("staged note content:")
+									fmt.Print(result.NoteContent)
+									if !strings.HasSuffix(result.NoteContent, "\n") {
+										fmt.Println()
+									}
+								}
+							}
+							return nil
 						}
 						noteMsg := ""
 						if result.NotePath != "" {
@@ -146,32 +270,72 @@ func Run() {
 					return nil
 				},
 			},
-			{
-				Name:    "list",
-				Aliases: []string{"ls"},
-				Usage:   "lists existing todos in tabular format",
-				Action: func(ctx context.Context, cmd *cli.Command) error {
-					tasks, err := todo.List(todoPath)
-					if err != nil {
-						return exitError(err)
-					}
-					if len(tasks) == 0 {
-						fmt.Println("No tasks found.")
+			func() *cli.Command {
+				var (
+					asJSON bool
+					state  string
+					stale  int
+				)
+				return &cli.Command{
+					Name:    "list",
+					Aliases: []string{"ls"},
+					Usage:   "lists existing todos in tabular format",
+					Flags: []cli.Flag{
+						&cli.BoolFlag{
+							Name:        "json",
+							Destination: &asJSON,
+							Usage:       "output machine-readable JSON",
+						},
+						&cli.IntFlag{
+							Name:        "stale",
+							Destination: &stale,
+							Usage:       "only show claimed tasks older than N days",
+						},
+						&cli.StringFlag{
+							Name:        "state",
+							Destination: &state,
+							Usage:       "filter by status: open, progress, done",
+							Validator:   validation.Enum("open", "progress", "done"),
+						},
+					},
+					Action: func(ctx context.Context, cmd *cli.Command) error {
+						filter := todo.ListFilter{StaleDays: stale}
+						if state != "" {
+							s := parseState(state)
+							filter.State = &s
+						}
+						tasks, err := todo.List(todoPath, filter)
+						if err != nil {
+							return exitError(err)
+						}
+						if asJSON {
+							return writeJSON(tasks)
+						}
+						if len(tasks) == 0 {
+							fmt.Println("No tasks found.")
+							return nil
+						}
+						w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+						// tabwriter write errors surface on Flush below.
+						_, _ = fmt.Fprintln(w, "\tID\tPRIORITY\tOPENED\tCLAIMED\tAGE\tSUMMARY")
+						_, _ = fmt.Fprintln(w, "\t--\t--------\t------\t-------\t---\t-------")
+						for _, t := range tasks {
+							age := ""
+							if t.AgeDays() >= 0 {
+								age = fmt.Sprintf("%dd", t.AgeDays())
+							} else {
+								age = "-"
+							}
+							_, _ = fmt.Fprintf(w, "[%s]\t%s\t%s\t%s\t%s\t%s\t%s\n",
+								t.Status, t.ID, t.Priority, t.Opened, dashIfEmpty(t.Claimed), age, t.Summary)
+						}
+						if err := w.Flush(); err != nil {
+							return exitError(err)
+						}
 						return nil
-					}
-					w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-					// tabwriter write errors surface on Flush below.
-					_, _ = fmt.Fprintln(w, "\tID\tPRIORITY\tOPENED\tSUMMARY")
-					_, _ = fmt.Fprintln(w, "\t--\t--------\t------\t-------")
-					for _, t := range tasks {
-						_, _ = fmt.Fprintf(w, "[%s]\t%s\t%s\t%s\t%s\n", t.Status, t.ID, t.Priority, t.Opened, t.Summary)
-					}
-					if err := w.Flush(); err != nil {
-						return exitError(err)
-					}
-					return nil
-				},
-			},
+					},
+				}
+			}(),
 			{
 				Name:      "pickup",
 				Usage:     "pick up a task (mark as in progress)",

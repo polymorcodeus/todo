@@ -63,12 +63,17 @@ type Task struct {
 	Opened   string
 	Status   Status
 	Summary  string
+	Claimed  string // date the task was picked up; empty until pickup
 }
 
 // String serializes a task back into its on-disk line format.
 func (t Task) String() string {
-	return fmt.Sprintf("- [%s] [%s][priority:%s][opened:%s] %s",
-		t.Status, t.ID, t.Priority, t.Opened, t.Summary)
+	claimed := ""
+	if t.Claimed != "" {
+		claimed = "[claimed:" + t.Claimed + "]"
+	}
+	return fmt.Sprintf("- [%s] [%s][priority:%s][opened:%s]%s %s",
+		t.Status, t.ID, t.Priority, t.Opened, claimed, t.Summary)
 }
 
 type header struct {
@@ -80,7 +85,9 @@ type header struct {
 	otherLines   []string
 }
 
-var taskRegex = regexp.MustCompile(`^- \[(x|X|o|O|\s+)\] \[(TSK-\d{3})\]\[priority:(high|med|low)\]\[opened:(\d{4}-\d{2}-\d{2})\] (.+)$`)
+// taskRegex matches a serialized task line. The claimed field is optional so
+// files written before claimed existed still parse.
+var taskRegex = regexp.MustCompile(`^- \[(x|X|o|O|\s+)\] \[(TSK-\d{3})\]\[priority:(high|med|low)\]\[opened:(\d{4}-\d{2}-\d{2})\](?:\[claimed:(\d{4}-\d{2}-\d{2})\])? (.+)$`)
 
 // parseTask parses a serialized task line. It returns false for lines that do
 // not match the task format.
@@ -89,12 +96,17 @@ func parseTask(line string) (Task, bool) {
 	if len(m) < 6 {
 		return Task{}, false
 	}
+	claimed := ""
+	if m[5] != "" {
+		claimed = m[5]
+	}
 	return Task{
 		ID:       m[2],
 		Priority: m[3],
 		Opened:   m[4],
 		Status:   parseStatus(m[1]),
-		Summary:  m[5],
+		Summary:  m[6],
+		Claimed:  claimed,
 	}, true
 }
 
@@ -110,13 +122,27 @@ func parseTaskFields(line string) (id, priority, opened, status, summary string)
 
 // AddResult describes a task created by Add.
 type AddResult struct {
-	ID       string
-	Priority string
-	NotePath string
+	ID          string
+	Priority    string
+	Line        string // serialized task line (also the would-be line in dry-run)
+	NotePath    string
+	NoteContent string
 }
 
-func Add(todoPath, notesDir, priority, summary string, create bool) (AddResult, error) {
-	tasks, header, err := parseTodoFile(todoPath)
+// AddOptions configures Add.
+type AddOptions struct {
+	TodoPath    string
+	NotesDir    string
+	Priority    string
+	Summary     string
+	CreateNote  bool
+	NoteContent string // content to write into the note; empty means empty note
+	NoteFile    string // path to an existing file to copy into the note (copy, not move)
+	DryRun      bool   // preview what would be written without persisting
+}
+
+func Add(opts AddOptions) (AddResult, error) {
+	tasks, header, err := parseTodoFile(opts.TodoPath)
 	if err != nil {
 		return AddResult{}, fmt.Errorf("read todo file: %w", err)
 	}
@@ -125,29 +151,54 @@ func Add(todoPath, notesDir, priority, summary string, create bool) (AddResult, 
 
 	task := Task{
 		ID:       nextID,
-		Priority: priority,
+		Priority: opts.Priority,
 		Opened:   now().Format("2006-01-02"),
 		Status:   StatusOpen,
-		Summary:  summary,
+		Summary:  opts.Summary,
+	}
+
+	result := AddResult{
+		ID:       nextID,
+		Priority: opts.Priority,
+		Line:     task.String(),
+	}
+
+	// Resolve the note content once up front so dry-run can preview it.
+	notePath := ""
+	if opts.CreateNote {
+		notePath = filepath.Join(opts.NotesDir, nextID+".md")
+		result.NotePath = notePath
+
+		content := opts.NoteContent
+		if opts.NoteFile != "" {
+			data, err := os.ReadFile(opts.NoteFile)
+			if err != nil {
+				return AddResult{}, fmt.Errorf("read note file: %w", err)
+			}
+			content = string(data)
+		}
+		result.NoteContent = content
+	}
+
+	if opts.DryRun {
+		return result, nil
 	}
 
 	header.lastUpdated = now().Format("2006-01-02T15:04")
-	if err := writeTodoFile(todoPath, header, append(tasks, task)); err != nil {
+	if err := writeTodoFile(opts.TodoPath, header, append(tasks, task)); err != nil {
 		return AddResult{}, fmt.Errorf("write todo file: %w", err)
 	}
 
-	notePath := ""
-	if create {
-		if err := os.MkdirAll(notesDir, 0755); err != nil {
+	if opts.CreateNote {
+		if err := os.MkdirAll(opts.NotesDir, 0755); err != nil {
 			return AddResult{}, fmt.Errorf("create notes dir: %w", err)
 		}
-		notePath = filepath.Join(notesDir, nextID+".md")
-		if err := os.WriteFile(notePath, []byte{}, 0644); err != nil {
+		if err := os.WriteFile(notePath, []byte(result.NoteContent), 0644); err != nil {
 			return AddResult{}, fmt.Errorf("write note: %w", err)
 		}
 	}
 
-	return AddResult{ID: nextID, Priority: priority, NotePath: notePath}, nil
+	return result, nil
 }
 
 func Init(todoPath string) error {
@@ -203,6 +254,7 @@ func Pickup(todoPath, notesDir, ref string) (string, string, error) {
 	}
 
 	tasks[idx].Status = StatusInProgress
+	tasks[idx].Claimed = now().Format("2006-01-02")
 	return writeUpdated(todoPath, header, tasks, idx, notesDir)
 }
 
@@ -238,6 +290,7 @@ func Complete(todoPath, notesDir, ref string, clear bool) (string, string, error
 	}
 
 	tasks[idx].Status = StatusDone
+	tasks[idx].Claimed = ""
 	return writeUpdated(todoPath, header, tasks, idx, notesDir)
 }
 
@@ -294,13 +347,46 @@ func writeTodoFile(path string, h header, tasks []Task) error {
 	return os.WriteFile(path, []byte(b.String()), 0644)
 }
 
-// List returns the tasks in a todo file, in file order.
-func List(todoPath string) ([]Task, error) {
+// ListFilter filters tasks returned by List. A nil State matches all states;
+// StaleDays <= 0 disables stale filtering.
+type ListFilter struct {
+	State     *Status
+	StaleDays int
+}
+
+// List returns the tasks in a todo file, in file order, filtered by f.
+func List(todoPath string, f ListFilter) ([]Task, error) {
 	tasks, _, err := parseTodoFile(todoPath)
 	if err != nil {
 		return nil, fmt.Errorf("read todo file: %w", err)
 	}
-	return tasks, nil
+
+	out := make([]Task, 0, len(tasks))
+	for _, t := range tasks {
+		age := t.AgeDays()
+		if f.State != nil && t.Status != *f.State {
+			continue
+		}
+		if f.StaleDays > 0 && (age < 0 || age < f.StaleDays) {
+			continue
+		}
+		out = append(out, t)
+	}
+	return out, nil
+}
+
+// AgeDays returns the number of full days since the task was claimed, or -1
+// when the task has no claimed date (i.e. is not in progress).
+func (t Task) AgeDays() int {
+	if t.Claimed == "" {
+		return -1
+	}
+	claimed, err := time.Parse("2006-01-02", t.Claimed)
+	if err != nil {
+		return -1
+	}
+	now := now().Truncate(24 * time.Hour)
+	return int(now.Sub(claimed).Hours() / 24)
 }
 
 func parseTodoFile(path string) ([]Task, header, error) {

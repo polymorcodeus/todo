@@ -120,7 +120,12 @@ func TestAdd(t *testing.T) {
 
 	todoPath, notesDir := writeTestTodo(t, nil)
 
-	result, err := Add(todoPath, notesDir, "high", "new task", false)
+	result, err := Add(AddOptions{
+		TodoPath: todoPath,
+		NotesDir: notesDir,
+		Priority: "high",
+		Summary:  "new task",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,6 +152,10 @@ func TestAdd(t *testing.T) {
 }
 
 func TestPickup(t *testing.T) {
+	claimed := time.Date(2026, 8, 18, 10, 30, 0, 0, time.UTC)
+	setNow(func() time.Time { return claimed })
+	defer setNow(time.Now)
+
 	todoPath, notesDir := writeTestTodo(t, sampleTasks)
 
 	line, note, err := Pickup(todoPath, notesDir, "#1")
@@ -156,6 +165,9 @@ func TestPickup(t *testing.T) {
 	if !strings.HasPrefix(line, "- [o] [TSK-001]") {
 		t.Errorf("pickup line = %q, want [o] TSK-001", line)
 	}
+	if !strings.Contains(line, "[claimed:2026-08-18]") {
+		t.Errorf("pickup line = %q, want claimed date", line)
+	}
 	if note != "" {
 		t.Errorf("note = %q, want empty (no notes dir)", note)
 	}
@@ -163,6 +175,9 @@ func TestPickup(t *testing.T) {
 	tasks := readTasks(t, todoPath)
 	if !strings.HasPrefix(tasks[0].String(), "- [o] [TSK-001]") {
 		t.Errorf("task after pickup = %q", tasks[0].String())
+	}
+	if tasks[0].Claimed != "2026-08-18" {
+		t.Errorf("task claimed = %q, want 2026-08-18", tasks[0].Claimed)
 	}
 	if tasks[1] != sampleTasks[1] {
 		t.Errorf("unrelated task changed: %q", tasks[1].String())
@@ -324,5 +339,203 @@ func TestCompleteParkNote(t *testing.T) {
 	}
 	if want := filepath.Join(notesDir, "TSK-002.md"); note != want {
 		t.Errorf("note = %q, want %q", note, want)
+	}
+}
+
+func TestCompleteDropsClaimed(t *testing.T) {
+	fixed := time.Date(2026, 8, 18, 10, 30, 0, 0, time.UTC)
+	setNow(func() time.Time { return fixed })
+	defer setNow(time.Now)
+
+	todoPath, notesDir := writeTestTodo(t, sampleTasks)
+	tasks := readTasks(t, todoPath)
+	tasks[1].Claimed = "2026-08-18"
+	_ = writeTodoFile(todoPath, header{project: "test", repo: "http://example.com/repo", lastUpdated: "2026-01-01T00:00", configured: "2026-01-01", legacySource: "none"}, tasks)
+
+	line, _, err := Complete(todoPath, notesDir, "TSK-002", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(line, "claimed") {
+		t.Errorf("completed line still has claimed: %q", line)
+	}
+	after := readTasks(t, todoPath)
+	if after[1].Claimed != "" {
+		t.Errorf("claimed not dropped on complete: %q", after[1].String())
+	}
+}
+
+func TestAddDryRun(t *testing.T) {
+	fixed := time.Date(2026, 8, 18, 10, 30, 0, 0, time.UTC)
+	setNow(func() time.Time { return fixed })
+	defer setNow(time.Now)
+
+	todoPath, notesDir := writeTestTodo(t, nil)
+
+	result, err := Add(AddOptions{
+		TodoPath:    todoPath,
+		NotesDir:    notesDir,
+		Priority:    "med",
+		Summary:     "x",
+		CreateNote:  true,
+		NoteContent: "note body",
+		DryRun:      true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ID != "TSK-001" {
+		t.Errorf("dry run ID = %q, want TSK-001", result.ID)
+	}
+	if want := "- [ ] [TSK-001][priority:med][opened:2026-08-18] x"; result.Line != want {
+		t.Errorf("dry run line = %q, want %q", result.Line, want)
+	}
+	if want := filepath.Join(notesDir, "TSK-001.md"); result.NotePath != want {
+		t.Errorf("dry run note path = %q, want %q", result.NotePath, want)
+	}
+	if result.NoteContent != "note body" {
+		t.Errorf("dry run note content = %q, want %q", result.NoteContent, "note body")
+	}
+
+	// Nothing persisted: no todo file change and no note file on disk.
+	if _, err := os.Stat(filepath.Join(notesDir, "TSK-001.md")); !os.IsNotExist(err) {
+		t.Errorf("dry run wrote a note file: %v", err)
+	}
+	if len(readTasks(t, todoPath)) != 0 {
+		t.Error("dry run wrote a task")
+	}
+}
+
+func TestAddNoteContent(t *testing.T) {
+	todoPath, notesDir := writeTestTodo(t, nil)
+
+	result, err := Add(AddOptions{
+		TodoPath:    todoPath,
+		NotesDir:    notesDir,
+		Priority:    "med",
+		Summary:     "with note",
+		CreateNote:  true,
+		NoteContent: "hello\nworld",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(notesDir, "TSK-001.md"); result.NotePath != want {
+		t.Errorf("note path = %q, want %q", result.NotePath, want)
+	}
+	data, err := os.ReadFile(filepath.Join(notesDir, "TSK-001.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "hello\nworld" {
+		t.Errorf("note content = %q, want %q", string(data), "hello\nworld")
+	}
+}
+
+func TestAddNoteFileCopy(t *testing.T) {
+	todoPath, notesDir := writeTestTodo(t, nil)
+	src := filepath.Join(t.TempDir(), "src.md")
+	if err := os.WriteFile(src, []byte("from file"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Add(AddOptions{
+		TodoPath:   todoPath,
+		NotesDir:   notesDir,
+		Priority:   "med",
+		Summary:    "copy note",
+		CreateNote: true,
+		NoteFile:   src,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(notesDir, "TSK-001.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "from file" {
+		t.Errorf("note content = %q, want %q", string(data), "from file")
+	}
+	// Copy, not move: source still present.
+	if _, err := os.Stat(src); err != nil {
+		t.Errorf("source file was moved: %v", err)
+	}
+}
+
+func TestListFilterState(t *testing.T) {
+	todoPath, _ := writeTestTodo(t, sampleTasks)
+
+	open := StatusOpen
+	tasks, err := List(todoPath, ListFilter{State: &open})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 || tasks[0].ID != "TSK-001" {
+		t.Errorf("open filter = %+v, want only TSK-001", tasks)
+	}
+
+	// No filter returns everything in file order.
+	all, err := List(todoPath, ListFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 3 {
+		t.Errorf("unfiltered = %d, want 3", len(all))
+	}
+}
+
+func TestListFilterStale(t *testing.T) {
+	fixed := time.Date(2026, 8, 18, 10, 30, 0, 0, time.UTC)
+	setNow(func() time.Time { return fixed })
+	defer setNow(time.Now)
+
+	staleTask := Task{
+		ID: "TSK-010", Priority: "med", Opened: "2026-08-01",
+		Status: StatusInProgress, Summary: "old", Claimed: "2026-08-10", // 8 days ago
+	}
+	freshTask := Task{
+		ID: "TSK-011", Priority: "med", Opened: "2026-08-01",
+		Status: StatusInProgress, Summary: "fresh", Claimed: "2026-08-17", // 1 day ago
+	}
+	todoPath, _ := writeTestTodo(t, []Task{staleTask, freshTask})
+
+	// stale threshold that includes the 8-day task only.
+	tasks, err := List(todoPath, ListFilter{StaleDays: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 || tasks[0].ID != "TSK-010" {
+		t.Errorf("stale filter = %+v, want only TSK-010", tasks)
+	}
+}
+
+func TestAgeDays(t *testing.T) {
+	fixed := time.Date(2026, 8, 18, 10, 30, 0, 0, time.UTC)
+	setNow(func() time.Time { return fixed })
+	defer setNow(time.Now)
+
+	if got := (Task{}).AgeDays(); got != -1 {
+		t.Errorf("unclaimed AgeDays = %d, want -1", got)
+	}
+	if got := (Task{Claimed: "2026-08-10"}).AgeDays(); got != 8 {
+		t.Errorf("AgeDays = %d, want 8", got)
+	}
+	if got := (Task{Claimed: "2026-08-18"}).AgeDays(); got != 0 {
+		t.Errorf("AgeDays today = %d, want 0", got)
+	}
+}
+
+func TestRoundTripWithClaimed(t *testing.T) {
+	tt := Task{
+		ID: "TSK-001", Priority: "high", Opened: "2026-08-01",
+		Status: StatusInProgress, Summary: "claimed task", Claimed: "2026-08-10",
+	}
+	got, ok := parseTask(tt.String())
+	if !ok {
+		t.Fatalf("parseTask(%q): not recognized", tt.String())
+	}
+	if got != tt {
+		t.Errorf("round trip = %+v, want %+v", got, tt)
 	}
 }
