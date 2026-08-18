@@ -16,7 +16,7 @@ YELLOW=\033[0;33m
 BLUE=\033[0;34m
 NC=\033[0m # No Color
 
-.PHONY: help build test clean install uninstall fmt lint vet tidy run dev cross-compile release goreleaser-check goreleaser-snapshot
+.PHONY: help build test test-v test-cover run fmt lint vet tidy check install uninstall clean deps
 
 ## help: Show this help message
 help:
@@ -28,7 +28,6 @@ help:
 	@echo "  test-v      Run tests with verbose output"
 	@echo "  test-cover  Run tests with coverage"
 	@echo "  run         Run the application"
-	@echo "  dev         Development mode with file watching"
 	@echo ""
 	@echo "$(GREEN)Code Quality:$(NC)"
 	@echo "  fmt         Format Go code"
@@ -40,12 +39,6 @@ help:
 	@echo "$(GREEN)Installation:$(NC)"
 	@echo "  install     Install binary to /usr/local/bin"
 	@echo "  uninstall   Remove binary from /usr/local/bin"
-	@echo ""
-	@echo "$(GREEN)Release:$(NC)"
-	@echo "  cross-compile       Build for multiple platforms (legacy)"
-	@echo "  release             Create release builds (legacy)"
-	@echo "  goreleaser-check    Validate .goreleaser.yml config"
-	@echo "  goreleaser-snapshot Build snapshot release with GoReleaser"
 	@echo ""
 	@echo "$(GREEN)Utilities:$(NC)"
 	@echo "  clean       Clean build artifacts"
@@ -80,12 +73,6 @@ test-cover:
 run: build
 	@echo "$(BLUE)Running $(BINARY_NAME)...$(NC)"
 	@./$(BINARY_NAME)
-
-## dev: Development mode with file watching (requires entr)
-dev:
-	@echo "$(YELLOW)Development mode - watching for changes...$(NC)"
-	@echo "$(YELLOW)Install 'entr' if not available: brew install entr$(NC)"
-	@find . -name "*.go" | entr -r make run
 
 ## fmt: Format Go code
 fmt:
@@ -131,28 +118,10 @@ uninstall:
 	@sudo rm -f /usr/local/bin/$(BINARY_NAME)
 	@echo "$(GREEN)$(BINARY_NAME) uninstalled$(NC)"
 
-## cross-compile: Build for multiple platforms
-cross-compile: clean
-	@echo "$(BLUE)Cross-compiling for multiple platforms...$(NC)"
-	@mkdir -p dist
-	@GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o dist/$(BINARY_NAME)-linux-amd64 .
-	@GOOS=linux GOARCH=arm64 go build $(LDFLAGS) -o dist/$(BINARY_NAME)-linux-arm64 .
-	@GOOS=darwin GOARCH=amd64 go build $(LDFLAGS) -o dist/$(BINARY_NAME)-darwin-amd64 .
-	@GOOS=darwin GOARCH=arm64 go build $(LDFLAGS) -o dist/$(BINARY_NAME)-darwin-arm64 .
-	@GOOS=windows GOARCH=amd64 go build $(LDFLAGS) -o dist/$(BINARY_NAME)-windows-amd64.exe .
-	@echo "$(GREEN)Cross-compilation complete. Binaries in dist/$(NC)"
-
-## release: Create release builds with checksums
-release: cross-compile
-	@echo "$(BLUE)Creating release artifacts...$(NC)"
-	@cd dist && sha256sum * > checksums.txt
-	@echo "$(GREEN)Release artifacts created in dist/$(NC)"
-
 ## clean: Clean build artifacts
 clean:
 	@echo "$(BLUE)Cleaning...$(NC)"
 	@rm -f $(BINARY_NAME)
-	@rm -rf dist/
 	@rm -f coverage.out coverage.html
 	@echo "$(GREEN)Clean complete$(NC)"
 
@@ -160,27 +129,7 @@ clean:
 deps:
 	@echo "$(BLUE)Installing development dependencies...$(NC)"
 	@go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
-	@if ! command -v goreleaser >/dev/null 2>&1; then \
-		echo "$(BLUE)Installing GoReleaser...$(NC)"; \
-		go install github.com/goreleaser/goreleaser@latest; \
-	fi
 	@echo "$(GREEN)Dependencies installed$(NC)"
-
-## goreleaser-check: Validate GoReleaser configuration
-goreleaser-check:
-	@echo "$(BLUE)Validating GoReleaser configuration...$(NC)"
-	@if command -v goreleaser >/dev/null 2>&1; then \
-		goreleaser check; \
-		echo "$(GREEN)GoReleaser configuration is valid$(NC)"; \
-	else \
-		echo "$(YELLOW)GoReleaser not found. Install with: make deps$(NC)"; \
-	fi
-
-## goreleaser-snapshot: Build snapshot release with GoReleaser
-goreleaser-snapshot: goreleaser-check
-	@echo "$(BLUE)Building snapshot release with GoReleaser...$(NC)"
-	@goreleaser build --snapshot --clean
-	@echo "$(GREEN)Snapshot release built in dist/$(NC)"
 
 # Default target
 all: check build 

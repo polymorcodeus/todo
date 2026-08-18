@@ -27,5 +27,5 @@ func init() {
 func main() {
 	cmd.SetVersion(version)
 	cmd.SetBuildTime(buildTime)
-	cmd.Main()
+	cmd.Run()
 }

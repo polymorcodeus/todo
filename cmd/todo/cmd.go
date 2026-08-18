@@ -1,5 +1,5 @@
-// Package todo defines the todo CLI command tree and wiring.
-package todo
+// Package cmd defines the todo CLI command tree and wiring.
+package cmd
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"text/tabwriter"
 
 	validation "github.com/urfave/cli-validation"
 	"github.com/urfave/cli/v3"
@@ -41,8 +42,8 @@ func exitError(err error) error {
 	return cli.Exit(err.Error(), 1)
 }
 
-// Main runs the root command.
-func Main() {
+// Run runs the root command.
+func Run() {
 	var (
 		repoRoot           string
 		todoPath, notesDir string
@@ -114,9 +115,15 @@ func Main() {
 						return ctx, nil
 					},
 					Action: func(ctx context.Context, cmd *cli.Command) error {
-						if err := todo.Add(todoPath, notesDir, priority, summary, create); err != nil {
+						result, err := todo.Add(todoPath, notesDir, priority, summary, create)
+						if err != nil {
 							return exitError(err)
 						}
+						noteMsg := ""
+						if result.NotePath != "" {
+							noteMsg = fmt.Sprintf(" + note %s", result.NotePath)
+						}
+						fmt.Printf("Created %s [priority:%s]%s\n", result.ID, result.Priority, noteMsg)
 						return nil
 					},
 				}
@@ -144,7 +151,22 @@ func Main() {
 				Aliases: []string{"ls"},
 				Usage:   "lists existing todos in tabular format",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
-					if err := todo.List(todoPath); err != nil {
+					tasks, err := todo.List(todoPath)
+					if err != nil {
+						return exitError(err)
+					}
+					if len(tasks) == 0 {
+						fmt.Println("No tasks found.")
+						return nil
+					}
+					w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+					// tabwriter write errors surface on Flush below.
+					_, _ = fmt.Fprintln(w, "\tID\tPRIORITY\tOPENED\tSUMMARY")
+					_, _ = fmt.Fprintln(w, "\t--\t--------\t------\t-------")
+					for _, t := range tasks {
+						_, _ = fmt.Fprintf(w, "[%s]\t%s\t%s\t%s\t%s\n", t.Status, t.ID, t.Priority, t.Opened, t.Summary)
+					}
+					if err := w.Flush(); err != nil {
 						return exitError(err)
 					}
 					return nil

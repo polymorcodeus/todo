@@ -5,15 +5,16 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
-var sampleTasks = []string{
-	"- [ ] [TSK-001][priority:high][opened:2026-08-01] fix the thing",
-	"- [o] [TSK-002][priority:med][opened:2026-08-02] refactor parser",
-	"- [x] [TSK-003][priority:low][opened:2026-08-03] write docs",
+var sampleTasks = []Task{
+	{ID: "TSK-001", Priority: "high", Opened: "2026-08-01", Status: StatusOpen, Summary: "fix the thing"},
+	{ID: "TSK-002", Priority: "med", Opened: "2026-08-02", Status: StatusInProgress, Summary: "refactor parser"},
+	{ID: "TSK-003", Priority: "low", Opened: "2026-08-03", Status: StatusDone, Summary: "write docs"},
 }
 
-func writeTestTodo(t *testing.T, tasks []string) (string, string) {
+func writeTestTodo(t *testing.T, tasks []Task) (string, string) {
 	t.Helper()
 	dir := t.TempDir()
 	todoPath := filepath.Join(dir, ".todo", "todo.md")
@@ -34,7 +35,7 @@ func writeTestTodo(t *testing.T, tasks []string) (string, string) {
 	return todoPath, notesDir
 }
 
-func readTasks(t *testing.T, todoPath string) []string {
+func readTasks(t *testing.T, todoPath string) []Task {
 	t.Helper()
 	tasks, _, err := parseTodoFile(todoPath)
 	if err != nil {
@@ -71,39 +72,77 @@ func TestNormalizeTaskRef(t *testing.T) {
 	}
 }
 
-func TestSetCheckbox(t *testing.T) {
-	line := "- [ ] [TSK-001][priority:high][opened:2026-08-01] fix the thing"
+func TestParseStatus(t *testing.T) {
 	for _, tc := range []struct {
-		state string
-		want  string
+		in   string
+		want Status
 	}{
-		{"o", "- [o] [TSK-001][priority:high][opened:2026-08-01] fix the thing"},
-		{"x", "- [x] [TSK-001][priority:high][opened:2026-08-01] fix the thing"},
+		{" ", StatusOpen},
+		{"o", StatusInProgress},
+		{"x", StatusDone},
+		{"O", StatusInProgress},
+		{"X", StatusDone},
+		{"unknown", StatusOpen},
 	} {
-		got, err := setCheckbox(line, tc.state)
-		if err != nil {
-			t.Fatalf("setCheckbox(%q): %v", tc.state, err)
-		}
-		if got != tc.want {
-			t.Errorf("setCheckbox(%q) = %q, want %q", tc.state, got, tc.want)
+		if got := parseStatus(tc.in); got != tc.want {
+			t.Errorf("parseStatus(%q) = %q, want %q", tc.in, got, tc.want)
 		}
 	}
+}
 
-	if _, err := setCheckbox(line, "z"); err == nil {
-		t.Error("setCheckbox with invalid state: expected error")
-	}
-	if _, err := setCheckbox("no checkbox here", "o"); err == nil {
-		t.Error("setCheckbox on line without checkbox: expected error")
+func TestTaskRoundTrip(t *testing.T) {
+	for _, tt := range sampleTasks {
+		line := tt.String()
+		got, ok := parseTask(line)
+		if !ok {
+			t.Fatalf("parseTask(%q): not recognized", line)
+		}
+		if got != tt {
+			t.Errorf("round trip = %+v, want %+v", got, tt)
+		}
 	}
 }
 
 func TestParseTaskFieldsAndNextID(t *testing.T) {
-	id, pri, opened, status, sum := parseTaskFields(sampleTasks[0])
+	id, pri, opened, status, sum := parseTaskFields(sampleTasks[0].String())
 	if id != "TSK-001" || pri != "high" || opened != "2026-08-01" || status != " " || sum != "fix the thing" {
 		t.Errorf("parseTaskFields got %q %q %q %q %q", id, pri, opened, status, sum)
 	}
 	if got := nextTaskID(sampleTasks); got != "TSK-004" {
 		t.Errorf("nextTaskID = %q, want TSK-004", got)
+	}
+}
+
+func TestAdd(t *testing.T) {
+	fixed := time.Date(2026, 8, 18, 10, 30, 0, 0, time.UTC)
+	setNow(func() time.Time { return fixed })
+	defer setNow(time.Now)
+
+	todoPath, notesDir := writeTestTodo(t, nil)
+
+	result, err := Add(todoPath, notesDir, "high", "new task", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ID != "TSK-001" {
+		t.Errorf("result.ID = %q, want TSK-001", result.ID)
+	}
+	if result.Priority != "high" {
+		t.Errorf("result.Priority = %q, want high", result.Priority)
+	}
+	if result.NotePath != "" {
+		t.Errorf("result.NotePath = %q, want empty", result.NotePath)
+	}
+
+	tasks := readTasks(t, todoPath)
+	if len(tasks) != 1 {
+		t.Fatalf("tasks = %d, want 1", len(tasks))
+	}
+	if tasks[0].Opened != "2026-08-18" {
+		t.Errorf("opened = %q, want 2026-08-18", tasks[0].Opened)
+	}
+	if tasks[0].Summary != "new task" {
+		t.Errorf("summary = %q, want new task", tasks[0].Summary)
 	}
 }
 
@@ -122,11 +161,11 @@ func TestPickup(t *testing.T) {
 	}
 
 	tasks := readTasks(t, todoPath)
-	if !strings.HasPrefix(tasks[0], "- [o] [TSK-001]") {
-		t.Errorf("task after pickup = %q", tasks[0])
+	if !strings.HasPrefix(tasks[0].String(), "- [o] [TSK-001]") {
+		t.Errorf("task after pickup = %q", tasks[0].String())
 	}
 	if tasks[1] != sampleTasks[1] {
-		t.Errorf("unrelated task changed: %q", tasks[1])
+		t.Errorf("unrelated task changed: %q", tasks[1].String())
 	}
 
 	_, header, err := parseTodoFile(todoPath)
@@ -135,6 +174,29 @@ func TestPickup(t *testing.T) {
 	}
 	if header.lastUpdated == "2026-01-01T00:00" {
 		t.Error("last_updated not updated by pickup")
+	}
+}
+
+func TestNotePath(t *testing.T) {
+	dir := t.TempDir()
+	notesDir := filepath.Join(dir, ".todo", "notes")
+	if err := os.MkdirAll(notesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	path, exists := NotePath(notesDir, "TSK-001")
+	if want := filepath.Join(notesDir, "TSK-001.md"); path != want {
+		t.Errorf("NotePath path = %q, want %q", path, want)
+	}
+	if exists {
+		t.Error("NotePath exists = true before note created")
+	}
+
+	if err := os.WriteFile(path, []byte("note"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := NotePath(notesDir, "TSK-001"); !exists {
+		t.Error("NotePath exists = false after note created")
 	}
 }
 
@@ -151,8 +213,8 @@ func TestPickupWithNote(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if note != "TSK-001.md" {
-		t.Errorf("note = %q, want TSK-001.md", note)
+	if want := filepath.Join(notesDir, "TSK-001.md"); note != want {
+		t.Errorf("note = %q, want %q", note, want)
 	}
 }
 
@@ -178,8 +240,8 @@ func TestComplete(t *testing.T) {
 	}
 
 	tasks := readTasks(t, todoPath)
-	if !strings.HasPrefix(tasks[1], "- [x] [TSK-002]") {
-		t.Errorf("task after complete = %q", tasks[1])
+	if !strings.HasPrefix(tasks[1].String(), "- [x] [TSK-002]") {
+		t.Errorf("task after complete = %q", tasks[1].String())
 	}
 
 	_, header, err := parseTodoFile(todoPath)
@@ -209,7 +271,7 @@ func TestCompleteClear(t *testing.T) {
 	if len(tasks) != 2 {
 		t.Fatalf("tasks after clear = %d, want 2", len(tasks))
 	}
-	if strings.Contains(tasks[0], "TSK-003") || strings.Contains(tasks[1], "TSK-003") {
+	if strings.Contains(tasks[0].String(), "TSK-003") || strings.Contains(tasks[1].String(), "TSK-003") {
 		t.Errorf("TSK-003 still present after clear: %v", tasks)
 	}
 }
@@ -230,7 +292,7 @@ func TestCompleteParkNote(t *testing.T) {
 	if !strings.HasPrefix(line, "- [x] [TSK-003]") {
 		t.Errorf("cleared line = %q, want original TSK-003 line", line)
 	}
-	if note != "TSK-003.md" {
-		t.Errorf("note = %q, want TSK-003.md", note)
+	if want := filepath.Join(notesDir, "TSK-003.md"); note != want {
+		t.Errorf("note = %q, want %q", note, want)
 	}
 }
