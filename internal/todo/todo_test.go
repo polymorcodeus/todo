@@ -108,8 +108,17 @@ func TestParseTaskFieldsAndNextID(t *testing.T) {
 	if id != "TSK-001" || pri != "high" || opened != "2026-08-01" || status != " " || sum != "fix the thing" {
 		t.Errorf("parseTaskFields got %q %q %q %q %q", id, pri, opened, status, sum)
 	}
-	if got := nextTaskID(sampleTasks); got != "TSK-004" {
+	if got := nextTaskID(sampleTasks, header{}); got != "TSK-004" {
 		t.Errorf("nextTaskID = %q, want TSK-004", got)
+	}
+	if got := nextTaskID(sampleTasks, header{nextID: "TSK-010"}); got != "TSK-010" {
+		t.Errorf("nextTaskID with high next_id = %q, want TSK-010", got)
+	}
+	if got := nextTaskID(nil, header{nextID: "TSK-004"}); got != "TSK-004" {
+		t.Errorf("nextTaskID empty-with-next = %q, want TSK-004", got)
+	}
+	if got := nextTaskID(nil, header{nextID: "garbage"}); got != "TSK-001" {
+		t.Errorf("nextTaskID malformed = %q, want TSK-001", got)
 	}
 }
 
@@ -624,5 +633,146 @@ func TestRemoveNotFound(t *testing.T) {
 	todoPath, notesDir := writeTestTodo(t, sampleTasks)
 	if _, _, err := Remove(todoPath, notesDir, "999"); err == nil {
 		t.Error("remove of missing task: expected error")
+	}
+}
+
+func TestAddBackfillsNextIDOnOldFile(t *testing.T) {
+	fixed := time.Date(2026, 8, 18, 10, 30, 0, 0, time.UTC)
+	setNow(func() time.Time { return fixed })
+	defer setNow(time.Now)
+
+	// Write a legacy file with no next_id field and three tasks.
+	todoPath, notesDir := writeTestTodo(t, sampleTasks)
+	h := &header{}
+	h.project = "test"
+	h.repo = "http://example.com/repo"
+	h.configured = "2026-01-01"
+	h.lastUpdated = "2026-01-01T00:00"
+	h.legacySource = "none"
+	_ = writeTodoFile(todoPath, *h, sampleTasks)
+
+	result, err := Add(AddOptions{TodoPath: todoPath, NotesDir: notesDir, Priority: "med", Summary: "next"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ID != "TSK-004" {
+		t.Errorf("first add after migration = %q, want TSK-004", result.ID)
+	}
+
+	// Header should now carry next_id: TSK-005.
+	_, header, err := parseTodoFile(todoPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if header.nextID != "TSK-005" {
+		t.Errorf("next_id after add = %q, want TSK-005", header.nextID)
+	}
+}
+
+func TestAddResumesAfterEmptying(t *testing.T) {
+	fixed := time.Date(2026, 8, 18, 10, 30, 0, 0, time.UTC)
+	setNow(func() time.Time { return fixed })
+	defer setNow(time.Now)
+
+	todoPath, notesDir := writeTestTodo(t, sampleTasks)
+	// Backfill a next_id high-water mark (as a prior add would have written).
+	h := &header{}
+	h.project = "test"
+	h.repo = "http://example.com/repo"
+	h.configured = "2026-01-01"
+	h.lastUpdated = "2026-01-01T00:00"
+	h.legacySource = "none"
+	h.nextID = "TSK-004"
+	_ = writeTodoFile(todoPath, *h, sampleTasks)
+
+	// Remove every task.
+	for _, ref := range []string{"TSK-001", "TSK-002", "TSK-003"} {
+		if _, _, err := Remove(todoPath, notesDir, ref); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// next_id must NOT be decremented by removals.
+	_, header, err := parseTodoFile(todoPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if header.nextID != "TSK-004" {
+		t.Errorf("next_id after removals = %q, want TSK-004 preserved", header.nextID)
+	}
+
+	result, err := Add(AddOptions{TodoPath: todoPath, NotesDir: notesDir, Priority: "med", Summary: "new"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ID != "TSK-004" {
+		t.Errorf("add after emptying = %q, want TSK-004 (resume high-water mark)", result.ID)
+	}
+}
+
+func TestBackfillInvalidNextID(t *testing.T) {
+	fixed := time.Date(2026, 8, 18, 10, 30, 0, 0, time.UTC)
+	setNow(func() time.Time { return fixed })
+	defer setNow(time.Now)
+
+	todoPath, notesDir := writeTestTodo(t, sampleTasks)
+
+	// Malformed next_id is treated as absent and backfilled on the next write.
+	h := &header{}
+	h.project = "test"
+	h.repo = "http://example.com/repo"
+	h.configured = "2026-01-01"
+	h.lastUpdated = "2026-01-01T00:00"
+	h.legacySource = "none"
+	h.nextID = "not-a-task"
+	_ = writeTodoFile(todoPath, *h, sampleTasks)
+
+	result, err := Add(AddOptions{TodoPath: todoPath, NotesDir: notesDir, Priority: "med", Summary: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ID != "TSK-004" {
+		t.Errorf("add with malformed next_id = %q, want TSK-004", result.ID)
+	}
+
+	// A next_id <= max(current) is likewise backfilled upward.
+	h2 := &header{}
+	h2.project = "test"
+	h2.repo = "http://example.com/repo"
+	h2.configured = "2026-01-01"
+	h2.lastUpdated = "2026-01-01T00:00"
+	h2.legacySource = "none"
+	h2.nextID = "TSK-002" // stale: below current max of 3
+	_ = writeTodoFile(todoPath, *h2, sampleTasks)
+
+	r2, err := Add(AddOptions{TodoPath: todoPath, NotesDir: notesDir, Priority: "med", Summary: "y"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r2.ID != "TSK-004" {
+		t.Errorf("add with stale next_id = %q, want TSK-004", r2.ID)
+	}
+}
+
+func TestNormalizeHeaderPreservesHighMark(t *testing.T) {
+	tasks := []Task{
+		{ID: "TSK-001", Status: StatusOpen},
+	}
+	var h header
+	h.nextID = "TSK-050" // valid high mark well above current max
+	normalizeHeader(&h, tasks)
+	if h.nextID != "TSK-050" {
+		t.Errorf("normalizeHeader lowered high mark = %q, want TSK-050", h.nextID)
+	}
+
+	h2 := header{nextID: "TSK-002"} // stale: <= max (3) -> backfilled
+	highTasks := []Task{
+		{ID: "TSK-001", Status: StatusOpen},
+		{ID: "TSK-002", Status: StatusOpen},
+		{ID: "TSK-003", Status: StatusOpen},
+	}
+	normalizeHeader(&h2, highTasks)
+	if h2.nextID != "TSK-004" {
+		t.Errorf("normalizeHeader stale next_id = %q, want TSK-004", h2.nextID)
 	}
 }

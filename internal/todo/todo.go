@@ -82,6 +82,7 @@ type header struct {
 	lastUpdated  string
 	configured   string
 	legacySource string
+	nextID       string // monotonic high-water mark (TSK-NNN); lazy-backfilled on write
 	otherLines   []string
 }
 
@@ -147,7 +148,7 @@ func Add(opts AddOptions) (AddResult, error) {
 		return AddResult{}, fmt.Errorf("read todo file: %w", err)
 	}
 
-	nextID := nextTaskID(tasks)
+	nextID := nextTaskID(tasks, header)
 
 	task := Task{
 		ID:       nextID,
@@ -375,6 +376,9 @@ func renderHeader(h header) string {
 	if h.legacySource != "" {
 		fmt.Fprintf(&b, "legacy_source: %s\n", h.legacySource)
 	}
+	if h.nextID != "" {
+		fmt.Fprintf(&b, "next_id: %s\n", h.nextID)
+	}
 	for _, ol := range h.otherLines {
 		b.WriteString(ol)
 		b.WriteString("\n")
@@ -387,6 +391,10 @@ func renderHeader(h header) string {
 func writeTodoFile(path string, h header, tasks []Task) error {
 	var b strings.Builder
 
+	// Lazily backfill recognized header fields before writing so every
+	// mutation converges toward a valid, self-describing header.
+	normalizeHeader(&h, tasks)
+
 	b.WriteString(renderHeader(h))
 
 	for _, t := range tasks {
@@ -395,6 +403,19 @@ func writeTodoFile(path string, h header, tasks []Task) error {
 	}
 
 	return os.WriteFile(path, []byte(b.String()), 0644)
+}
+
+// normalizeHeader ensures recognized header fields are valid before a write,
+// lazily backfilling missing, malformed, or stale values. It never decrements
+// next_id: missing/invalid/too-low next_id is rewritten to max(id)+1, while a
+// valid high mark is preserved so removed tasks are never re-issued.
+func normalizeHeader(h *header, tasks []Task) {
+	if n, ok := parseIDNum(h.nextID); !ok || n <= maxTaskNum(tasks) {
+		h.nextID = formatID(maxTaskNum(tasks) + 1)
+	}
+	if h.lastUpdated == "" {
+		h.lastUpdated = now().Format("2006-01-02T15:04")
+	}
 }
 
 // ListFilter filters tasks returned by List. A nil State matches all states;
@@ -471,6 +492,8 @@ func parseTodoFile(path string) ([]Task, header, error) {
 				h.legacySource = strings.TrimSpace(after1)
 			} else if after2, ok2 := strings.CutPrefix(line, "last_updated:"); ok2 {
 				h.lastUpdated = strings.TrimSpace(after2)
+			} else if after3, ok3 := strings.CutPrefix(line, "next_id:"); ok3 {
+				h.nextID = strings.TrimSpace(after3)
 			} else {
 				h.otherLines = append(h.otherLines, line)
 			}
@@ -489,19 +512,45 @@ func parseTodoFile(path string) ([]Task, header, error) {
 	return tasks, h, scanner.Err()
 }
 
-func nextTaskID(tasks []Task) string {
+// maxTaskNum returns the highest numeric part of a task ID, or 0 when absent.
+func maxTaskNum(tasks []Task) int {
 	max := 0
 	for _, t := range tasks {
-		numStr := strings.TrimPrefix(t.ID, "TSK-")
-		n, err := strconv.Atoi(numStr)
-		if err != nil {
-			continue
-		}
-		if n > max {
+		if n, ok := parseIDNum(t.ID); ok && n > max {
 			max = n
 		}
 	}
-	return fmt.Sprintf("TSK-%03d", max+1)
+	return max
+}
+
+// parseIDNum parses a TSK-NNN (or bare number) identifier into its numeric
+// part. ok is false for empty, malformed, or out-of-range values.
+func parseIDNum(s string) (int, bool) {
+	s = strings.TrimSpace(s)
+	s = strings.TrimPrefix(strings.ToUpper(s), "TSK-")
+	if s == "" {
+		return 0, false
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n < 0 || n > 999999 {
+		return 0, false
+	}
+	return n, true
+}
+
+// formatID renders a numeric task id as its zero-padded TSK-NNN form.
+func formatID(n int) string {
+	return fmt.Sprintf("TSK-%03d", n)
+}
+
+// nextTaskID returns the ID to issue for the next task: the larger of the
+// header's next_id high-water mark (when valid) and max(current ids)+1.
+func nextTaskID(tasks []Task, h header) string {
+	candidate := maxTaskNum(tasks) + 1
+	if n, ok := parseIDNum(h.nextID); ok && n > candidate {
+		candidate = n
+	}
+	return formatID(candidate)
 }
 
 func normalizeTaskRef(ref string) (string, error) {

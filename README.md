@@ -57,12 +57,22 @@ State rules:
 Tasks are stored as lines under a YAML-like frontmatter header in `.todo/todo.md`:
 
 ```
+---
+project: todo
+last_updated: 2026-08-18T10:37
+configured: 2026-08-18
+legacy_source: none
+next_id: TSK-005
+---
+
 - [ ] [TSK-001][priority:high][opened:2026-08-01] fix the thing
 - [o] [TSK-002][priority:med][opened:2026-08-02][claimed:2026-08-10] refactor parser
 - [x] [TSK-003][priority:low][opened:2026-08-03] write docs
 ```
 
 Status is `[ ]` open, `[o]` in progress, `[x]` done. `claimed:` records when a task was picked up (present only on in-progress tasks). Optional companion notes live at `.todo/notes/<ID>.md`.
+
+`next_id:` is a monotonic high-water mark: `add` never reuses it, so removing all tasks still lets new tasks resume at the next ID rather than restarting at TSK-001. It is backfilled automatically on any write, so files created before this field existed converge without manual action.
 
 ## Development
 
