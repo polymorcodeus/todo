@@ -41,6 +41,21 @@ func parseStatus(s string) Status {
 	}
 }
 
+// describeStatus returns a human-readable description of a task's status for
+// error messages.
+func describeStatus(s Status) string {
+	switch s {
+	case StatusOpen:
+		return "open"
+	case StatusInProgress:
+		return "in progress"
+	case StatusDone:
+		return "done"
+	default:
+		return "unknown"
+	}
+}
+
 // Task is a single todo modeled by the fields in its serialized line.
 type Task struct {
 	ID       string
@@ -183,6 +198,10 @@ func Pickup(todoPath, notesDir, ref string) (string, string, error) {
 		return "", "", err
 	}
 
+	if tasks[idx].Status != StatusOpen {
+		return "", "", fmt.Errorf("cannot pickup %s: task is %s", tasks[idx].ID, describeStatus(tasks[idx].Status))
+	}
+
 	tasks[idx].Status = StatusInProgress
 	return writeUpdated(todoPath, header, tasks, idx, notesDir)
 }
@@ -199,6 +218,10 @@ func Complete(todoPath, notesDir, ref string, clear bool) (string, string, error
 	idx, err := findTaskIndex(tasks, ref)
 	if err != nil {
 		return "", "", err
+	}
+
+	if tasks[idx].Status != StatusInProgress {
+		return "", "", fmt.Errorf("cannot complete %s: task is %s", tasks[idx].ID, describeStatus(tasks[idx].Status))
 	}
 
 	note, exists := NotePath(notesDir, tasks[idx].ID)

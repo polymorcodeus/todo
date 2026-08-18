@@ -225,6 +225,21 @@ func TestPickupNotFound(t *testing.T) {
 	}
 }
 
+func TestPickupAlreadyClaimed(t *testing.T) {
+	todoPath, notesDir := writeTestTodo(t, sampleTasks)
+	if _, _, err := Pickup(todoPath, notesDir, "2"); err == nil {
+		t.Error("pickup of in-progress task: expected error")
+	}
+	if _, _, err := Pickup(todoPath, notesDir, "3"); err == nil {
+		t.Error("pickup of done task: expected error")
+	}
+
+	tasks := readTasks(t, todoPath)
+	if tasks[1].Status != StatusInProgress || tasks[2].Status != StatusDone {
+		t.Error("failed pickup mutated task state")
+	}
+}
+
 func TestComplete(t *testing.T) {
 	todoPath, notesDir := writeTestTodo(t, sampleTasks)
 
@@ -253,15 +268,30 @@ func TestComplete(t *testing.T) {
 	}
 }
 
+func TestCompleteNotPickedUp(t *testing.T) {
+	todoPath, notesDir := writeTestTodo(t, sampleTasks)
+	if _, _, err := Complete(todoPath, notesDir, "1", false); err == nil {
+		t.Error("complete of open task: expected error")
+	}
+	if _, _, err := Complete(todoPath, notesDir, "3", false); err == nil {
+		t.Error("complete of done task: expected error")
+	}
+
+	tasks := readTasks(t, todoPath)
+	if tasks[0].Status != StatusOpen || tasks[2].Status != StatusDone {
+		t.Error("failed complete mutated task state")
+	}
+}
+
 func TestCompleteClear(t *testing.T) {
 	todoPath, notesDir := writeTestTodo(t, sampleTasks)
 
-	line, note, err := Complete(todoPath, notesDir, "3", true)
+	line, note, err := Complete(todoPath, notesDir, "2", true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(line, "- [x] [TSK-003]") {
-		t.Errorf("cleared line = %q, want original TSK-003 line", line)
+	if !strings.HasPrefix(line, "- [o] [TSK-002]") {
+		t.Errorf("cleared line = %q, want original TSK-002 line", line)
 	}
 	if note != "" {
 		t.Errorf("note = %q, want empty", note)
@@ -271,8 +301,8 @@ func TestCompleteClear(t *testing.T) {
 	if len(tasks) != 2 {
 		t.Fatalf("tasks after clear = %d, want 2", len(tasks))
 	}
-	if strings.Contains(tasks[0].String(), "TSK-003") || strings.Contains(tasks[1].String(), "TSK-003") {
-		t.Errorf("TSK-003 still present after clear: %v", tasks)
+	if strings.Contains(tasks[0].String(), "TSK-002") || strings.Contains(tasks[1].String(), "TSK-002") {
+		t.Errorf("TSK-002 still present after clear: %v", tasks)
 	}
 }
 
@@ -281,18 +311,18 @@ func TestCompleteParkNote(t *testing.T) {
 	if err := os.MkdirAll(notesDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(notesDir, "TSK-003.md"), []byte("note"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(notesDir, "TSK-002.md"), []byte("note"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	line, note, err := Complete(todoPath, notesDir, "TSK-003", true)
+	line, note, err := Complete(todoPath, notesDir, "TSK-002", true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(line, "- [x] [TSK-003]") {
-		t.Errorf("cleared line = %q, want original TSK-003 line", line)
+	if !strings.HasPrefix(line, "- [o] [TSK-002]") {
+		t.Errorf("cleared line = %q, want original TSK-002 line", line)
 	}
-	if want := filepath.Join(notesDir, "TSK-003.md"); note != want {
+	if want := filepath.Join(notesDir, "TSK-002.md"); note != want {
 		t.Errorf("note = %q, want %q", note, want)
 	}
 }
