@@ -6,12 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
+
+	"gitlab.com/fuzzyporpoise/todo/internal/fs"
+	"gitlab.com/fuzzyporpoise/todo/internal/git"
 )
 
 // now is the clock; tests override it via setNow to make behavior deterministic.
@@ -56,10 +58,29 @@ func describeStatus(s Status) string {
 	}
 }
 
+// Priority is the tri-level importance of a task.
+type Priority string
+
+const (
+	PriorityLow  Priority = "low"
+	PriorityMed  Priority = "med"
+	PriorityHigh Priority = "high"
+)
+
+// parsePriority validates a priority string.
+func parsePriority(s string) (Priority, error) {
+	switch Priority(s) {
+	case PriorityLow, PriorityMed, PriorityHigh:
+		return Priority(s), nil
+	default:
+		return "", fmt.Errorf("invalid priority %q: want low, med, or high", s)
+	}
+}
+
 // Task is a single todo modeled by the fields in its serialized line.
 type Task struct {
 	ID       string
-	Priority string
+	Priority Priority
 	Opened   string
 	Status   Status
 	Summary  string
@@ -88,7 +109,7 @@ type header struct {
 
 // taskRegex matches a serialized task line. The claimed field is optional so
 // files written before claimed existed still parse.
-var taskRegex = regexp.MustCompile(`^- \[(x|X|o|O|\s+)\] \[(TSK-\d{3})\]\[priority:(high|med|low)\]\[opened:(\d{4}-\d{2}-\d{2})\](?:\[claimed:(\d{4}-\d{2}-\d{2})\])? (.+)$`)
+var taskRegex = regexp.MustCompile(`^- \[(x|X|o|O|\s+)\] \[(TSK-\d{3,})\]\[priority:(high|med|low)\]\[opened:(\d{4}-\d{2}-\d{2})\](?:\[claimed:(\d{4}-\d{2}-\d{2})\])? (.+)$`)
 
 // parseTask parses a serialized task line. It returns false for lines that do
 // not match the task format.
@@ -103,7 +124,7 @@ func parseTask(line string) (Task, bool) {
 	}
 	return Task{
 		ID:       m[2],
-		Priority: m[3],
+		Priority: Priority(m[3]),
 		Opened:   m[4],
 		Status:   parseStatus(m[1]),
 		Summary:  m[6],
@@ -111,23 +132,36 @@ func parseTask(line string) (Task, bool) {
 	}, true
 }
 
-// parseTaskFields returns the display fields of a task line, using placeholders
-// when the line is not a recognized task.
-func parseTaskFields(line string) (id, priority, opened, status, summary string) {
-	t, ok := parseTask(line)
-	if !ok {
-		return "-", "-", "-", "-", line
-	}
-	return t.ID, t.Priority, t.Opened, string(t.Status), t.Summary
-}
-
 // AddResult describes a task created by Add.
 type AddResult struct {
 	ID          string
-	Priority    string
+	Priority    Priority
 	Line        string // serialized task line (also the would-be line in dry-run)
 	NotePath    string
 	NoteContent string
+}
+
+// Result describes the outcome of a task mutation: the affected task's
+// serialized line and the full path of its companion note, if any.
+type Result struct {
+	Line string
+	Note string
+}
+
+// RefOptions configures a single-task mutation (Pickup, Release, Remove).
+type RefOptions struct {
+	TodoPath string
+	NotesDir string
+	Ref      string // any form accepted by normalizeTaskRef
+}
+
+// CompleteOptions configures Complete. Clear removes the task line instead of
+// marking it done.
+type CompleteOptions struct {
+	TodoPath string
+	NotesDir string
+	Ref      string
+	Clear    bool
 }
 
 // AddOptions configures Add.
@@ -143,6 +177,11 @@ type AddOptions struct {
 }
 
 func Add(opts AddOptions) (AddResult, error) {
+	priority, err := parsePriority(opts.Priority)
+	if err != nil {
+		return AddResult{}, err
+	}
+
 	tasks, header, err := parseTodoFile(opts.TodoPath)
 	if err != nil {
 		return AddResult{}, fmt.Errorf("read todo file: %w", err)
@@ -152,7 +191,7 @@ func Add(opts AddOptions) (AddResult, error) {
 
 	task := Task{
 		ID:       nextID,
-		Priority: opts.Priority,
+		Priority: priority,
 		Opened:   now().Format("2006-01-02"),
 		Status:   StatusOpen,
 		Summary:  opts.Summary,
@@ -160,7 +199,7 @@ func Add(opts AddOptions) (AddResult, error) {
 
 	result := AddResult{
 		ID:       nextID,
-		Priority: opts.Priority,
+		Priority: priority,
 		Line:     task.String(),
 	}
 
@@ -191,10 +230,10 @@ func Add(opts AddOptions) (AddResult, error) {
 	}
 
 	if opts.CreateNote {
-		if err := os.MkdirAll(opts.NotesDir, 0755); err != nil {
+		if err := os.MkdirAll(opts.NotesDir, 0o755); err != nil {
 			return AddResult{}, fmt.Errorf("create notes dir: %w", err)
 		}
-		if err := os.WriteFile(notePath, []byte(result.NoteContent), 0644); err != nil {
+		if err := os.WriteFile(notePath, []byte(result.NoteContent), 0o644); err != nil {
 			return AddResult{}, fmt.Errorf("write note: %w", err)
 		}
 	}
@@ -203,16 +242,20 @@ func Add(opts AddOptions) (AddResult, error) {
 }
 
 func Init(todoPath string) error {
-	if _, err := os.Stat(todoPath); err == nil {
+	exists, err := fs.VerifyExists(todoPath)
+	if err != nil {
+		return fmt.Errorf("stat todo file: %w", err)
+	}
+	if exists {
 		return errors.New("todo already initialized - no action taken")
 	}
 
 	dir := filepath.Dir(todoPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create todo dir: %w", err)
 	}
 
-	repo := getRepoRemote()
+	repo := git.RemoteURL("origin")
 
 	current := now()
 	h := header{
@@ -223,140 +266,154 @@ func Init(todoPath string) error {
 		legacySource: "none",
 	}
 
-	return writeTodoFile(todoPath, h, nil)
-}
-
-func getRepoRemote() string {
-	cmd := exec.Command("git", "remote", "get-url", "origin")
-	out, err := cmd.Output()
-	if err != nil {
-		return ""
+	if err := writeTodoFile(todoPath, h, nil); err != nil {
+		return fmt.Errorf("write todo file: %w", err)
 	}
-	url := strings.TrimSpace(string(out))
-	url = strings.TrimSuffix(url, ".git")
-	return url
+	return nil
 }
 
 // Pickup marks the referenced task as in progress and returns its updated line
 // plus the full path of its companion note, if any.
-func Pickup(todoPath, notesDir, ref string) (string, string, error) {
-	tasks, header, err := parseTodoFile(todoPath)
+// Pickup marks the referenced task as in progress and returns its updated line
+// plus the full path of its companion note, if any.
+// Pickup marks the referenced task as in progress and returns its updated line
+// plus the full path of its companion note, if any.
+func Pickup(opts RefOptions) (Result, error) {
+	tasks, h, err := parseTodoFile(opts.TodoPath)
 	if err != nil {
-		return "", "", fmt.Errorf("read todo file: %w", err)
+		return Result{}, fmt.Errorf("read todo file: %w", err)
 	}
 
-	idx, err := findTaskIndex(tasks, ref)
+	idx, err := findTaskIndex(tasks, opts.Ref)
 	if err != nil {
-		return "", "", err
+		return Result{}, err
 	}
 
 	if tasks[idx].Status != StatusOpen {
-		return "", "", fmt.Errorf("cannot pickup %s: task is %s", tasks[idx].ID, describeStatus(tasks[idx].Status))
+		return Result{}, fmt.Errorf("cannot pickup %s: task is %s", tasks[idx].ID, describeStatus(tasks[idx].Status))
 	}
 
 	tasks[idx].Status = StatusInProgress
 	tasks[idx].Claimed = now().Format("2006-01-02")
-	return writeUpdated(todoPath, header, tasks, idx, notesDir)
+	return writeUpdated(opts.TodoPath, h, tasks, idx, opts.NotesDir)
 }
 
 // Complete marks the referenced task done (or removes its line when clear is
 // true) and returns the resulting line plus the full path of its companion
 // note, if any.
-func Complete(todoPath, notesDir, ref string, clear bool) (string, string, error) {
-	tasks, header, err := parseTodoFile(todoPath)
+// Complete marks the referenced task done (or removes its line when clear is
+// true) and returns the resulting line plus the full path of its companion
+// note, if any.
+// Complete marks the referenced task done (or removes its line when Clear is
+// true) and returns the resulting line plus the full path of its companion
+// note, if any.
+func Complete(opts CompleteOptions) (Result, error) {
+	tasks, h, err := parseTodoFile(opts.TodoPath)
 	if err != nil {
-		return "", "", fmt.Errorf("read todo file: %w", err)
+		return Result{}, fmt.Errorf("read todo file: %w", err)
 	}
 
-	idx, err := findTaskIndex(tasks, ref)
+	idx, err := findTaskIndex(tasks, opts.Ref)
 	if err != nil {
-		return "", "", err
+		return Result{}, err
 	}
 
 	if tasks[idx].Status != StatusInProgress {
-		return "", "", fmt.Errorf("cannot complete %s: task is %s", tasks[idx].ID, describeStatus(tasks[idx].Status))
+		return Result{}, fmt.Errorf("cannot complete %s: task is %s", tasks[idx].ID, describeStatus(tasks[idx].Status))
 	}
 
-	note, exists := NotePath(notesDir, tasks[idx].ID)
+	note, exists := NotePath(opts.NotesDir, tasks[idx].ID)
 	if !exists {
 		note = ""
 	}
-	if clear {
+	if opts.Clear {
 		line := tasks[idx].String()
 		tasks = append(tasks[:idx], tasks[idx+1:]...)
-		if err := writeTodoFile(todoPath, header, tasks); err != nil {
-			return "", note, fmt.Errorf("write todo file: %w", err)
+		if err := writeTodoFile(opts.TodoPath, h, tasks); err != nil {
+			return Result{}, fmt.Errorf("write todo file: %w", err)
 		}
-		return line, note, nil
+		return Result{Line: line, Note: note}, nil
 	}
 
 	tasks[idx].Status = StatusDone
 	tasks[idx].Claimed = ""
-	return writeUpdated(todoPath, header, tasks, idx, notesDir)
+	return writeUpdated(opts.TodoPath, h, tasks, idx, opts.NotesDir)
 }
 
 // Release returns a picked-up task to open and drops its claimed date. It only
 // accepts an in-progress task and returns the resulting line plus the full
 // path of its companion note, if any.
-func Release(todoPath, notesDir, ref string) (string, string, error) {
-	tasks, header, err := parseTodoFile(todoPath)
+// Release returns a picked-up task to open and drops its claimed date. It only
+// accepts an in-progress task and returns the resulting line plus the full
+// path of its companion note, if any.
+// Release returns a picked-up task to open and drops its claimed date. It only
+// accepts an in-progress task and returns the resulting line plus the full
+// path of its companion note, if any.
+func Release(opts RefOptions) (Result, error) {
+	tasks, h, err := parseTodoFile(opts.TodoPath)
 	if err != nil {
-		return "", "", fmt.Errorf("read todo file: %w", err)
+		return Result{}, fmt.Errorf("read todo file: %w", err)
 	}
 
-	idx, err := findTaskIndex(tasks, ref)
+	idx, err := findTaskIndex(tasks, opts.Ref)
 	if err != nil {
-		return "", "", err
+		return Result{}, err
 	}
 
 	if tasks[idx].Status != StatusInProgress {
-		return "", "", fmt.Errorf("cannot release %s: task is %s", tasks[idx].ID, describeStatus(tasks[idx].Status))
+		return Result{}, fmt.Errorf("cannot release %s: task is %s", tasks[idx].ID, describeStatus(tasks[idx].Status))
 	}
 
 	tasks[idx].Status = StatusOpen
 	tasks[idx].Claimed = ""
-	return writeUpdated(todoPath, header, tasks, idx, notesDir)
+	return writeUpdated(opts.TodoPath, h, tasks, idx, opts.NotesDir)
 }
 
 // Remove deletes the referenced task line regardless of its status and returns
 // the removed line (unchanged) plus the full path of its companion note, if any.
-func Remove(todoPath, notesDir, ref string) (string, string, error) {
-	tasks, header, err := parseTodoFile(todoPath)
+// Remove deletes the referenced task line regardless of its status and returns
+// the removed line (unchanged) plus the full path of its companion note, if any.
+// Remove deletes the referenced task line regardless of its status and returns
+// the removed line (unchanged) plus the full path of its companion note, if any.
+func Remove(opts RefOptions) (Result, error) {
+	tasks, h, err := parseTodoFile(opts.TodoPath)
 	if err != nil {
-		return "", "", fmt.Errorf("read todo file: %w", err)
+		return Result{}, fmt.Errorf("read todo file: %w", err)
 	}
 
-	idx, err := findTaskIndex(tasks, ref)
+	idx, err := findTaskIndex(tasks, opts.Ref)
 	if err != nil {
-		return "", "", err
+		return Result{}, err
 	}
 
-	note, exists := NotePath(notesDir, tasks[idx].ID)
+	note, exists := NotePath(opts.NotesDir, tasks[idx].ID)
 	if !exists {
 		note = ""
 	}
 
 	line := tasks[idx].String()
 	tasks = append(tasks[:idx], tasks[idx+1:]...)
-	header.lastUpdated = now().Format("2006-01-02T15:04")
-	if err := writeTodoFile(todoPath, header, tasks); err != nil {
-		return "", note, fmt.Errorf("write todo file: %w", err)
+	h.lastUpdated = now().Format("2006-01-02T15:04")
+	if err := writeTodoFile(opts.TodoPath, h, tasks); err != nil {
+		return Result{}, fmt.Errorf("write todo file: %w", err)
 	}
-	return line, note, nil
+	return Result{Line: line, Note: note}, nil
 }
 
 // writeUpdated persists tasks after a status change and returns the updated
 // line and note for the task at idx.
-func writeUpdated(todoPath string, header header, tasks []Task, idx int, notesDir string) (string, string, error) {
-	header.lastUpdated = now().Format("2006-01-02T15:04")
-	if err := writeTodoFile(todoPath, header, tasks); err != nil {
-		return "", "", fmt.Errorf("write todo file: %w", err)
+// writeUpdated persists tasks after a status change and returns the updated
+// line and note for the task at idx.
+func writeUpdated(todoPath string, h header, tasks []Task, idx int, notesDir string) (Result, error) {
+	h.lastUpdated = now().Format("2006-01-02T15:04")
+	if err := writeTodoFile(todoPath, h, tasks); err != nil {
+		return Result{}, fmt.Errorf("write todo file: %w", err)
 	}
 	note, exists := NotePath(notesDir, tasks[idx].ID)
 	if !exists {
 		note = ""
 	}
-	return tasks[idx].String(), note, nil
+	return Result{Line: tasks[idx].String(), Note: note}, nil
 }
 
 func renderHeader(h header) string {
@@ -402,7 +459,7 @@ func writeTodoFile(path string, h header, tasks []Task) error {
 		b.WriteString("\n")
 	}
 
-	return os.WriteFile(path, []byte(b.String()), 0644)
+	return os.WriteFile(path, []byte(b.String()), 0o644)
 }
 
 // normalizeHeader ensures recognized header fields are valid before a write,
@@ -582,7 +639,8 @@ func findTaskIndex(tasks []Task, ref string) (int, error) {
 
 // NotePath returns the full path of a task's companion note in .todo/notes and
 // whether it currently exists on disk. It is empty when absent, so callers that
-// only need the path can discard the existence flag.
+// only need the path can discard the existence flag. Stat errors other than
+// "not exist" are treated as absent as well, matching the existing callers.
 func NotePath(notesDir, id string) (string, bool) {
 	path := filepath.Join(notesDir, id+".md")
 	if _, err := os.Stat(path); err != nil {

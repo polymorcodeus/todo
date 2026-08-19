@@ -3,21 +3,15 @@ package cmd
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
-	"log"
 	"os"
 	"path/filepath"
-	"strings"
-	"text/tabwriter"
 
 	validation "github.com/urfave/cli-validation"
 	"github.com/urfave/cli/v3"
 
 	"gitlab.com/fuzzyporpoise/todo/internal/fs"
-	"gitlab.com/fuzzyporpoise/todo/internal/todo"
+	"gitlab.com/fuzzyporpoise/todo/internal/git"
 )
 
 var (
@@ -44,86 +38,38 @@ func exitError(err error) error {
 	return cli.Exit(err.Error(), 1)
 }
 
-// parseState maps the --state flag value to a task Status filter.
-func parseState(s string) todo.Status {
-	switch s {
-	case "progress":
-		return todo.StatusInProgress
-	case "done":
-		return todo.StatusDone
-	default:
-		return todo.StatusOpen
-	}
-}
-
-// dashIfEmpty returns "-" for empty strings, used to keep columns aligned.
-func dashIfEmpty(s string) string {
-	if s == "" {
-		return "-"
-	}
-	return s
-}
-
-// jsonTask is the machine-readable representation of a task for --json.
-type jsonTask struct {
-	ID       string `json:"id"`
-	Status   string `json:"status"`
-	Priority string `json:"priority"`
-	Opened   string `json:"opened"`
-	Claimed  string `json:"claimed,omitempty"`
-	AgeDays  *int   `json:"age_days,omitempty"`
-	Summary  string `json:"summary"`
-}
-
-// writeJSON emits tasks as a JSON array of stable, documented fields.
-func writeJSON(tasks []todo.Task) error {
-	out := make([]jsonTask, 0, len(tasks))
-	for _, t := range tasks {
-		jt := jsonTask{
-			ID:       t.ID,
-			Status:   string(t.Status),
-			Priority: t.Priority,
-			Opened:   t.Opened,
-			Claimed:  t.Claimed,
-			Summary:  t.Summary,
-		}
-		if age := t.AgeDays(); age >= 0 {
-			jt.AgeDays = &age
-		}
-		out = append(out, jt)
-	}
-	enc := json.NewEncoder(os.Stdout)
-	enc.SetIndent("", "  ")
-	return enc.Encode(out)
-}
-
-// Run runs the root command.
-func Run() {
+// newApp builds the todo command tree. It is separate from Run so tests can
+// inject writers/readers and call app.Run directly.
+func newApp() *cli.Command {
 	var (
-		repoRoot           string
-		todoPath, notesDir string
+		repoRoot string
+		cfg      appConfig
 	)
 
-	app := &cli.Command{
+	return &cli.Command{
 		Name:                  "todo",
 		Version:               buildVersion(),
 		EnableShellCompletion: true,
 		Usage:                 "manage ad-hoc tasks in .todo/todo.md",
 		Before: func(ctx context.Context, cmd *cli.Command) (context.Context, error) {
 			var err error
-			repoRoot, err = fs.FindGitRepoRoot()
+			repoRoot, err = git.RepoRoot()
 			if err != nil {
 				return ctx, exitError(err)
 			}
 
-			todoPath = filepath.Join(repoRoot, ".todo", "todo.md")
-			notesDir = filepath.Join(repoRoot, ".todo", "notes")
+			cfg = appConfigFor(repoRoot)
 
-			// force explicit init if missing
-			if sub := cmd.Args().First(); sub != "init" {
-				if _, err := os.Stat(todoPath); err != nil {
-					return ctx, exitError(errors.New("repo not todo initialized - run `todo init`"))
-				}
+			// Allow `init` to run on an uninitialized repo.
+			if cmd.Args().First() == "init" {
+				return ctx, nil
+			}
+			exists, err := fs.VerifyExists(cfg.todoPath)
+			if err != nil {
+				return ctx, exitError(err)
+			}
+			if !exists {
+				return ctx, exitError(errors.New("repo not todo initialized - run `todo init`"))
 			}
 			return ctx, nil
 		},
@@ -189,66 +135,15 @@ func Run() {
 							Flags: [][]cli.Flag{{noteContentFlag}, {noteFileFlag}},
 						},
 					},
-					Before: func(ctx context.Context, cmd *cli.Command) (context.Context, error) {
-						if summary == "" {
-							summary = strings.TrimSpace(cmd.Args().First())
-						}
-						if summary == "" {
-							return ctx, exitError(errors.New("task summary required: provide as first argument or --summary"))
-						}
-						// Since MutualExclusiveFlags matches by the flag's declared
-						// Name, ensure they're wired to the same bool/state by
-						// reading them back from the command (they aren't bound
-						// to vars in the exclusive set).
-						_ = cmd
-						return ctx, nil
-					},
 					Action: func(ctx context.Context, cmd *cli.Command) error {
-						// Resolve note content: --note-content (or '-') takes
-						// precedence, then --note-file copy (handled internally
-						// by Add), else read note content from stdin.
-						content := cmd.String("note-content")
-						if content == "-" || (content == "" && create && cmd.String("note-file") == "") {
-							data, err := io.ReadAll(os.Stdin)
-							if err != nil {
-								return exitError(fmt.Errorf("read note stdin: %w", err))
-							}
-							content = string(data)
-						}
-
-						result, err := todo.Add(todo.AddOptions{
-							TodoPath:    todoPath,
-							NotesDir:    notesDir,
-							Priority:    priority,
-							Summary:     summary,
-							CreateNote:  create,
-							NoteContent: content,
-							NoteFile:    cmd.String("note-file"),
-							DryRun:      dryRun,
+						return runAdd(cmd, cfg, addOptions{
+							summary:     summary,
+							priority:    priority,
+							create:      create,
+							noteContent: noteContent,
+							noteFile:    noteFile,
+							dryRun:      dryRun,
 						})
-						if err != nil {
-							return exitError(err)
-						}
-						if dryRun {
-							fmt.Printf("would add:         %s\n", result.Line)
-							if result.NotePath != "" {
-								fmt.Printf("would create note: %s\n", result.NotePath)
-								if result.NoteContent != "" {
-									fmt.Println("staged note content:")
-									fmt.Print(result.NoteContent)
-									if !strings.HasSuffix(result.NoteContent, "\n") {
-										fmt.Println()
-									}
-								}
-							}
-							return nil
-						}
-						noteMsg := ""
-						if result.NotePath != "" {
-							noteMsg = fmt.Sprintf(" + note %s", result.NotePath)
-						}
-						fmt.Printf("Created %s [priority:%s]%s\n", result.ID, result.Priority, noteMsg)
-						return nil
 					},
 				}
 			}(),
@@ -256,18 +151,7 @@ func Run() {
 				Name:  "init",
 				Usage: "creates todo.md if missing",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
-					exists, err := fs.VerifyExists(todoPath)
-
-					if err != nil {
-						return exitError(err)
-					}
-					if !exists {
-						if err := todo.Init(todoPath); err != nil {
-							return exitError(err)
-						}
-						return nil
-					}
-					return nil
+					return runInit(cfg)
 				},
 			},
 			func() *cli.Command {
@@ -299,40 +183,11 @@ func Run() {
 						},
 					},
 					Action: func(ctx context.Context, cmd *cli.Command) error {
-						filter := todo.ListFilter{StaleDays: stale}
-						if state != "" {
-							s := parseState(state)
-							filter.State = &s
-						}
-						tasks, err := todo.List(todoPath, filter)
-						if err != nil {
-							return exitError(err)
-						}
-						if asJSON {
-							return writeJSON(tasks)
-						}
-						if len(tasks) == 0 {
-							fmt.Println("No tasks found.")
-							return nil
-						}
-						w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-						// tabwriter write errors surface on Flush below.
-						_, _ = fmt.Fprintln(w, "\tID\tPRIORITY\tOPENED\tCLAIMED\tAGE\tSUMMARY")
-						_, _ = fmt.Fprintln(w, "\t--\t--------\t------\t-------\t---\t-------")
-						for _, t := range tasks {
-							age := ""
-							if t.AgeDays() >= 0 {
-								age = fmt.Sprintf("%dd", t.AgeDays())
-							} else {
-								age = "-"
-							}
-							_, _ = fmt.Fprintf(w, "[%s]\t%s\t%s\t%s\t%s\t%s\t%s\n",
-								t.Status, t.ID, t.Priority, t.Opened, dashIfEmpty(t.Claimed), age, t.Summary)
-						}
-						if err := w.Flush(); err != nil {
-							return exitError(err)
-						}
-						return nil
+						return runList(cmd, cfg, listOptions{
+							asJSON: asJSON,
+							state:  state,
+							stale:  stale,
+						})
 					},
 				}
 			}(),
@@ -341,19 +196,7 @@ func Run() {
 				Usage:     "pick up a task (mark as in progress)",
 				ArgsUsage: "<task>",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
-					ref := strings.TrimSpace(cmd.Args().First())
-					if ref == "" {
-						return exitError(errors.New("task number required: e.g. todo pickup TSK-001"))
-					}
-					line, note, err := todo.Pickup(todoPath, notesDir, ref)
-					if err != nil {
-						return exitError(err)
-					}
-					fmt.Println(line)
-					if note != "" {
-						fmt.Println("note:", note)
-					}
-					return nil
+					return runPickup(cmd, cfg)
 				},
 			},
 			{
@@ -361,19 +204,7 @@ func Run() {
 				Usage:     "release a picked-up task back to open (drop its claim)",
 				ArgsUsage: "<task>",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
-					ref := strings.TrimSpace(cmd.Args().First())
-					if ref == "" {
-						return exitError(errors.New("task number required: e.g. todo release TSK-001"))
-					}
-					line, note, err := todo.Release(todoPath, notesDir, ref)
-					if err != nil {
-						return exitError(err)
-					}
-					fmt.Println(line)
-					if note != "" {
-						fmt.Println("note:", note)
-					}
-					return nil
+					return runRelease(cmd, cfg)
 				},
 			},
 			{
@@ -382,19 +213,7 @@ func Run() {
 				Usage:     "remove a task line by reference (any status)",
 				ArgsUsage: "<task>",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
-					ref := strings.TrimSpace(cmd.Args().First())
-					if ref == "" {
-						return exitError(errors.New("task number required: e.g. todo remove TSK-001"))
-					}
-					line, note, err := todo.Remove(todoPath, notesDir, ref)
-					if err != nil {
-						return exitError(err)
-					}
-					fmt.Println(line)
-					if note != "" {
-						fmt.Println("note:", note)
-					}
-					return nil
+					return runRemove(cmd, cfg)
 				},
 			},
 			func() *cli.Command {
@@ -417,29 +236,37 @@ func Run() {
 						},
 					},
 					Action: func(ctx context.Context, cmd *cli.Command) error {
-						ref := strings.TrimSpace(cmd.Args().First())
-						if ref == "" {
-							return exitError(errors.New("task number required: e.g. todo complete TSK-001"))
-						}
-						line, note, err := todo.Complete(todoPath, notesDir, ref, clear)
-						if err != nil {
-							return exitError(err)
-						}
-						fmt.Println(line)
-						if park {
-							if note != "" {
-								fmt.Println("note:", note)
-							} else {
-								fmt.Printf("no note to park for %s\n", ref)
-							}
-						}
-						return nil
+						return runComplete(cmd, cfg, completeOptions{
+							clear: clear,
+							park:  park,
+						})
 					},
 				}
 			}(),
 		},
 	}
+}
+
+// Run runs the root command.
+func Run() {
+	app := newApp()
 	if err := app.Run(context.Background(), os.Args); err != nil {
-		log.Fatal(err)
+		// cli has already reported the error by the time Run returns:
+		// HandleExitCoder prints ExitCoder messages (no timestamp) and usage
+		// errors are shown as "Incorrect Usage". Only the exit code is left.
+		code := 1
+		var exitErr cli.ExitCoder
+		if errors.As(err, &exitErr) {
+			code = exitErr.ExitCode()
+		}
+		os.Exit(code)
+	}
+}
+
+// appConfigFor builds the per-run configuration from the resolved repo root.
+func appConfigFor(repoRoot string) appConfig {
+	return appConfig{
+		todoPath: filepath.Join(repoRoot, ".todo", "todo.md"),
+		notesDir: filepath.Join(repoRoot, ".todo", "notes"),
 	}
 }

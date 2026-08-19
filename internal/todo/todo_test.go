@@ -14,6 +14,16 @@ var sampleTasks = []Task{
 	{ID: "TSK-003", Priority: "low", Opened: "2026-08-03", Status: StatusDone, Summary: "write docs"},
 }
 
+// parseTaskFields returns the display fields of a task line, using placeholders
+// when the line is not a recognized task.
+func parseTaskFields(line string) (id, priority, opened, status, summary string) {
+	t, ok := parseTask(line)
+	if !ok {
+		return "-", "-", "-", "-", line
+	}
+	return t.ID, string(t.Priority), t.Opened, string(t.Status), t.Summary
+}
+
 func writeTestTodo(t *testing.T, tasks []Task) (string, string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -90,8 +100,49 @@ func TestParseStatus(t *testing.T) {
 	}
 }
 
+func TestParsePriority(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want Priority
+	}{
+		{"low", PriorityLow},
+		{"med", PriorityMed},
+		{"high", PriorityHigh},
+	} {
+		got, err := parsePriority(tc.in)
+		if err != nil {
+			t.Fatalf("parsePriority(%q): %v", tc.in, err)
+		}
+		if got != tc.want {
+			t.Errorf("parsePriority(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+
+	for _, bad := range []string{"urgent", "", "HIGH"} {
+		if _, err := parsePriority(bad); err == nil {
+			t.Errorf("parsePriority(%q): expected error", bad)
+		}
+	}
+}
+
 func TestTaskRoundTrip(t *testing.T) {
 	for _, tt := range sampleTasks {
+		line := tt.String()
+		got, ok := parseTask(line)
+		if !ok {
+			t.Fatalf("parseTask(%q): not recognized", line)
+		}
+		if got != tt {
+			t.Errorf("round trip = %+v, want %+v", got, tt)
+		}
+	}
+}
+
+func TestTaskRoundTripLargeID(t *testing.T) {
+	for _, tt := range []Task{
+		{ID: "TSK-1000", Priority: "med", Opened: "2026-08-01", Status: StatusOpen, Summary: "four digit"},
+		{ID: "TSK-12345", Priority: "low", Opened: "2026-08-01", Status: StatusDone, Summary: "five digit"},
+	} {
 		line := tt.String()
 		got, ok := parseTask(line)
 		if !ok {
@@ -160,6 +211,25 @@ func TestAdd(t *testing.T) {
 	}
 }
 
+func TestAddInvalidPriority(t *testing.T) {
+	todoPath, notesDir := writeTestTodo(t, nil)
+
+	_, err := Add(AddOptions{
+		TodoPath: todoPath,
+		NotesDir: notesDir,
+		Priority: "urgent",
+		Summary:  "new task",
+	})
+	if err == nil {
+		t.Fatal("Add with invalid priority: expected error")
+	}
+
+	tasks := readTasks(t, todoPath)
+	if len(tasks) != 0 {
+		t.Errorf("invalid add wrote %d task(s), want 0", len(tasks))
+	}
+}
+
 func TestPickup(t *testing.T) {
 	claimed := time.Date(2026, 8, 18, 10, 30, 0, 0, time.UTC)
 	setNow(func() time.Time { return claimed })
@@ -167,18 +237,18 @@ func TestPickup(t *testing.T) {
 
 	todoPath, notesDir := writeTestTodo(t, sampleTasks)
 
-	line, note, err := Pickup(todoPath, notesDir, "#1")
+	res, err := Pickup(RefOptions{TodoPath: todoPath, NotesDir: notesDir, Ref: "#1"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(line, "- [o] [TSK-001]") {
-		t.Errorf("pickup line = %q, want [o] TSK-001", line)
+	if !strings.HasPrefix(res.Line, "- [o] [TSK-001]") {
+		t.Errorf("pickup line = %q, want [o] TSK-001", res.Line)
 	}
-	if !strings.Contains(line, "[claimed:2026-08-18]") {
-		t.Errorf("pickup line = %q, want claimed date", line)
+	if !strings.Contains(res.Line, "[claimed:2026-08-18]") {
+		t.Errorf("pickup line = %q, want claimed date", res.Line)
 	}
-	if note != "" {
-		t.Errorf("note = %q, want empty (no notes dir)", note)
+	if res.Note != "" {
+		t.Errorf("note = %q, want empty (no notes dir)", res.Note)
 	}
 
 	tasks := readTasks(t, todoPath)
@@ -192,11 +262,11 @@ func TestPickup(t *testing.T) {
 		t.Errorf("unrelated task changed: %q", tasks[1].String())
 	}
 
-	_, header, err := parseTodoFile(todoPath)
+	_, hdr, err := parseTodoFile(todoPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if header.lastUpdated == "2026-01-01T00:00" {
+	if hdr.lastUpdated == "2026-01-01T00:00" {
 		t.Error("last_updated not updated by pickup")
 	}
 }
@@ -233,28 +303,28 @@ func TestPickupWithNote(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, note, err := Pickup(todoPath, notesDir, "1")
+	res, err := Pickup(RefOptions{TodoPath: todoPath, NotesDir: notesDir, Ref: "1"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := filepath.Join(notesDir, "TSK-001.md"); note != want {
-		t.Errorf("note = %q, want %q", note, want)
+	if want := filepath.Join(notesDir, "TSK-001.md"); res.Note != want {
+		t.Errorf("note = %q, want %q", res.Note, want)
 	}
 }
 
 func TestPickupNotFound(t *testing.T) {
 	todoPath, notesDir := writeTestTodo(t, sampleTasks)
-	if _, _, err := Pickup(todoPath, notesDir, "999"); err == nil {
+	if _, err := Pickup(RefOptions{TodoPath: todoPath, NotesDir: notesDir, Ref: "999"}); err == nil {
 		t.Error("pickup of missing task: expected error")
 	}
 }
 
 func TestPickupAlreadyClaimed(t *testing.T) {
 	todoPath, notesDir := writeTestTodo(t, sampleTasks)
-	if _, _, err := Pickup(todoPath, notesDir, "2"); err == nil {
+	if _, err := Pickup(RefOptions{TodoPath: todoPath, NotesDir: notesDir, Ref: "2"}); err == nil {
 		t.Error("pickup of in-progress task: expected error")
 	}
-	if _, _, err := Pickup(todoPath, notesDir, "3"); err == nil {
+	if _, err := Pickup(RefOptions{TodoPath: todoPath, NotesDir: notesDir, Ref: "3"}); err == nil {
 		t.Error("pickup of done task: expected error")
 	}
 
@@ -267,15 +337,15 @@ func TestPickupAlreadyClaimed(t *testing.T) {
 func TestComplete(t *testing.T) {
 	todoPath, notesDir := writeTestTodo(t, sampleTasks)
 
-	line, note, err := Complete(todoPath, notesDir, "TSK-002", false)
+	res, err := Complete(CompleteOptions{TodoPath: todoPath, NotesDir: notesDir, Ref: "TSK-002", Clear: false})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(line, "- [x] [TSK-002]") {
-		t.Errorf("complete line = %q, want [x] TSK-002", line)
+	if !strings.HasPrefix(res.Line, "- [x] [TSK-002]") {
+		t.Errorf("complete line = %q, want [x] TSK-002", res.Line)
 	}
-	if note != "" {
-		t.Errorf("note = %q, want empty", note)
+	if res.Note != "" {
+		t.Errorf("note = %q, want empty", res.Note)
 	}
 
 	tasks := readTasks(t, todoPath)
@@ -283,21 +353,21 @@ func TestComplete(t *testing.T) {
 		t.Errorf("task after complete = %q", tasks[1].String())
 	}
 
-	_, header, err := parseTodoFile(todoPath)
+	_, hdr, err := parseTodoFile(todoPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if header.lastUpdated == "2026-01-01T00:00" {
+	if hdr.lastUpdated == "2026-01-01T00:00" {
 		t.Error("last_updated not updated by complete")
 	}
 }
 
 func TestCompleteNotPickedUp(t *testing.T) {
 	todoPath, notesDir := writeTestTodo(t, sampleTasks)
-	if _, _, err := Complete(todoPath, notesDir, "1", false); err == nil {
+	if _, err := Complete(CompleteOptions{TodoPath: todoPath, NotesDir: notesDir, Ref: "1", Clear: false}); err == nil {
 		t.Error("complete of open task: expected error")
 	}
-	if _, _, err := Complete(todoPath, notesDir, "3", false); err == nil {
+	if _, err := Complete(CompleteOptions{TodoPath: todoPath, NotesDir: notesDir, Ref: "3", Clear: false}); err == nil {
 		t.Error("complete of done task: expected error")
 	}
 
@@ -310,15 +380,15 @@ func TestCompleteNotPickedUp(t *testing.T) {
 func TestCompleteClear(t *testing.T) {
 	todoPath, notesDir := writeTestTodo(t, sampleTasks)
 
-	line, note, err := Complete(todoPath, notesDir, "2", true)
+	res, err := Complete(CompleteOptions{TodoPath: todoPath, NotesDir: notesDir, Ref: "2", Clear: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(line, "- [o] [TSK-002]") {
-		t.Errorf("cleared line = %q, want original TSK-002 line", line)
+	if !strings.HasPrefix(res.Line, "- [o] [TSK-002]") {
+		t.Errorf("cleared line = %q, want original TSK-002 line", res.Line)
 	}
-	if note != "" {
-		t.Errorf("note = %q, want empty", note)
+	if res.Note != "" {
+		t.Errorf("note = %q, want empty", res.Note)
 	}
 
 	tasks := readTasks(t, todoPath)
@@ -339,15 +409,15 @@ func TestCompleteParkNote(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	line, note, err := Complete(todoPath, notesDir, "TSK-002", true)
+	res, err := Complete(CompleteOptions{TodoPath: todoPath, NotesDir: notesDir, Ref: "TSK-002", Clear: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(line, "- [o] [TSK-002]") {
-		t.Errorf("cleared line = %q, want original TSK-002 line", line)
+	if !strings.HasPrefix(res.Line, "- [o] [TSK-002]") {
+		t.Errorf("cleared line = %q, want original TSK-002 line", res.Line)
 	}
-	if want := filepath.Join(notesDir, "TSK-002.md"); note != want {
-		t.Errorf("note = %q, want %q", note, want)
+	if want := filepath.Join(notesDir, "TSK-002.md"); res.Note != want {
+		t.Errorf("note = %q, want %q", res.Note, want)
 	}
 }
 
@@ -361,12 +431,12 @@ func TestCompleteDropsClaimed(t *testing.T) {
 	tasks[1].Claimed = "2026-08-18"
 	_ = writeTodoFile(todoPath, header{project: "test", repo: "http://example.com/repo", lastUpdated: "2026-01-01T00:00", configured: "2026-01-01", legacySource: "none"}, tasks)
 
-	line, _, err := Complete(todoPath, notesDir, "TSK-002", false)
+	res, err := Complete(CompleteOptions{TodoPath: todoPath, NotesDir: notesDir, Ref: "TSK-002", Clear: false})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(line, "claimed") {
-		t.Errorf("completed line still has claimed: %q", line)
+	if strings.Contains(res.Line, "claimed") {
+		t.Errorf("completed line still has claimed: %q", res.Line)
 	}
 	after := readTasks(t, todoPath)
 	if after[1].Claimed != "" {
@@ -560,15 +630,15 @@ func TestRelease(t *testing.T) {
 	tasks[1].Claimed = "2026-08-10"
 	_ = writeTodoFile(todoPath, header{project: "test", repo: "http://example.com/repo", lastUpdated: "2026-01-01T00:00", configured: "2026-01-01", legacySource: "none"}, tasks)
 
-	line, _, err := Release(todoPath, notesDir, "TSK-002")
+	res, err := Release(RefOptions{TodoPath: todoPath, NotesDir: notesDir, Ref: "TSK-002"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(line, "- [ ] [TSK-002]") {
-		t.Errorf("release line = %q, want open [ ] TSK-002", line)
+	if !strings.HasPrefix(res.Line, "- [ ] [TSK-002]") {
+		t.Errorf("release line = %q, want open [ ] TSK-002", res.Line)
 	}
-	if strings.Contains(line, "claimed") {
-		t.Errorf("release line still has claimed: %q", line)
+	if strings.Contains(res.Line, "claimed") {
+		t.Errorf("release line still has claimed: %q", res.Line)
 	}
 
 	after := readTasks(t, todoPath)
@@ -580,10 +650,10 @@ func TestRelease(t *testing.T) {
 func TestReleaseInvalid(t *testing.T) {
 	todoPath, notesDir := writeTestTodo(t, sampleTasks)
 	// Open and done tasks cannot be released.
-	if _, _, err := Release(todoPath, notesDir, "1"); err == nil {
+	if _, err := Release(RefOptions{TodoPath: todoPath, NotesDir: notesDir, Ref: "1"}); err == nil {
 		t.Error("release of open task: expected error")
 	}
-	if _, _, err := Release(todoPath, notesDir, "3"); err == nil {
+	if _, err := Release(RefOptions{TodoPath: todoPath, NotesDir: notesDir, Ref: "3"}); err == nil {
 		t.Error("release of done task: expected error")
 	}
 	tasks := readTasks(t, todoPath)
@@ -596,12 +666,12 @@ func TestRemove(t *testing.T) {
 	todoPath, notesDir := writeTestTodo(t, sampleTasks)
 
 	// Remove a done task line - the [x] -> removed path.
-	line, _, err := Remove(todoPath, notesDir, "TSK-003")
+	res, err := Remove(RefOptions{TodoPath: todoPath, NotesDir: notesDir, Ref: "TSK-003"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(line, "- [x] [TSK-003]") {
-		t.Errorf("removed line = %q, want original TSK-003 line", line)
+	if !strings.HasPrefix(res.Line, "- [x] [TSK-003]") {
+		t.Errorf("removed line = %q, want original TSK-003 line", res.Line)
 	}
 
 	tasks := readTasks(t, todoPath)
@@ -619,7 +689,7 @@ func TestRemoveAnyStatus(t *testing.T) {
 	todoPath, notesDir := writeTestTodo(t, sampleTasks)
 	// Remove an open and an in-progress task; all statuses should work.
 	for _, ref := range []string{"TSK-001", "TSK-002"} {
-		if _, _, err := Remove(todoPath, notesDir, ref); err != nil {
+		if _, err := Remove(RefOptions{TodoPath: todoPath, NotesDir: notesDir, Ref: ref}); err != nil {
 			t.Fatalf("remove %s: %v", ref, err)
 		}
 	}
@@ -631,7 +701,7 @@ func TestRemoveAnyStatus(t *testing.T) {
 
 func TestRemoveNotFound(t *testing.T) {
 	todoPath, notesDir := writeTestTodo(t, sampleTasks)
-	if _, _, err := Remove(todoPath, notesDir, "999"); err == nil {
+	if _, err := Remove(RefOptions{TodoPath: todoPath, NotesDir: notesDir, Ref: "999"}); err == nil {
 		t.Error("remove of missing task: expected error")
 	}
 }
@@ -660,12 +730,12 @@ func TestAddBackfillsNextIDOnOldFile(t *testing.T) {
 	}
 
 	// Header should now carry next_id: TSK-005.
-	_, header, err := parseTodoFile(todoPath)
+	_, hdr, err := parseTodoFile(todoPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if header.nextID != "TSK-005" {
-		t.Errorf("next_id after add = %q, want TSK-005", header.nextID)
+	if hdr.nextID != "TSK-005" {
+		t.Errorf("next_id after add = %q, want TSK-005", hdr.nextID)
 	}
 }
 
@@ -687,18 +757,18 @@ func TestAddResumesAfterEmptying(t *testing.T) {
 
 	// Remove every task.
 	for _, ref := range []string{"TSK-001", "TSK-002", "TSK-003"} {
-		if _, _, err := Remove(todoPath, notesDir, ref); err != nil {
+		if _, err := Remove(RefOptions{TodoPath: todoPath, NotesDir: notesDir, Ref: ref}); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	// next_id must NOT be decremented by removals.
-	_, header, err := parseTodoFile(todoPath)
+	_, hdr, err := parseTodoFile(todoPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if header.nextID != "TSK-004" {
-		t.Errorf("next_id after removals = %q, want TSK-004 preserved", header.nextID)
+	if hdr.nextID != "TSK-004" {
+		t.Errorf("next_id after removals = %q, want TSK-004 preserved", hdr.nextID)
 	}
 
 	result, err := Add(AddOptions{TodoPath: todoPath, NotesDir: notesDir, Priority: "med", Summary: "new"})
