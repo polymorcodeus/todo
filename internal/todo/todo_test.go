@@ -846,3 +846,134 @@ func TestNormalizeHeaderPreservesHighMark(t *testing.T) {
 		t.Errorf("normalizeHeader stale next_id = %q, want TSK-004", h2.nextID)
 	}
 }
+
+func TestDetailNoNote(t *testing.T) {
+	fixed := time.Date(2026, 8, 18, 10, 30, 0, 0, time.UTC)
+	setNow(func() time.Time { return fixed })
+	defer setNow(time.Now)
+
+	todoPath, notesDir := writeTestTodo(t, sampleTasks)
+	res, err := Detail(DetailOptions{TodoPath: todoPath, NotesDir: notesDir, Ref: "1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Task.ID != "TSK-001" {
+		t.Errorf("ID = %q, want TSK-001", res.Task.ID)
+	}
+	if res.Task.Status != StatusOpen {
+		t.Errorf("status = %q, want open", res.Task.Status)
+	}
+	if res.Task.OpenedDays() != 17 {
+		t.Errorf("opened_days = %d, want 17", res.Task.OpenedDays())
+	}
+	if res.NoteExists {
+		t.Error("NoteExists = true, want false")
+	}
+	if res.NotePreview != "" {
+		t.Errorf("NotePreview = %q, want empty", res.NotePreview)
+	}
+}
+
+func TestDetailWithNote(t *testing.T) {
+	todoPath, notesDir := writeTestTodo(t, sampleTasks)
+	if err := os.MkdirAll(notesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	notePath := filepath.Join(notesDir, "TSK-001.md")
+	if err := os.WriteFile(notePath, []byte("line 1\nline 2\nline 3\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := Detail(DetailOptions{TodoPath: todoPath, NotesDir: notesDir, Ref: "1", Lines: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.NoteExists {
+		t.Error("NoteExists = false, want true")
+	}
+	want := "line 1\nline 2\nline 3"
+	if res.NotePreview != want {
+		t.Errorf("NotePreview = %q, want %q", res.NotePreview, want)
+	}
+	if res.NoteTruncated {
+		t.Error("NoteTruncated = true, want false")
+	}
+}
+
+func TestDetailNoteTruncation(t *testing.T) {
+	todoPath, notesDir := writeTestTodo(t, sampleTasks)
+	if err := os.MkdirAll(notesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	notePath := filepath.Join(notesDir, "TSK-001.md")
+	if err := os.WriteFile(notePath, []byte("line 1\nline 2\nline 3\nline 4\nline 5"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := Detail(DetailOptions{TodoPath: todoPath, NotesDir: notesDir, Ref: "1", Lines: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "line 1\nline 2\nline 3"
+	if res.NotePreview != want {
+		t.Errorf("NotePreview = %q, want %q", res.NotePreview, want)
+	}
+	if !res.NoteTruncated {
+		t.Error("NoteTruncated = false, want true")
+	}
+}
+
+func TestDetailNoNoteFlag(t *testing.T) {
+	todoPath, notesDir := writeTestTodo(t, sampleTasks)
+	if err := os.MkdirAll(notesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(notesDir, "TSK-001.md"), []byte("secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := Detail(DetailOptions{TodoPath: todoPath, NotesDir: notesDir, Ref: "1", NoNote: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.NoteExists {
+		t.Error("NoteExists = false, want true")
+	}
+	if res.NotePreview != "" {
+		t.Errorf("NotePreview = %q, want empty", res.NotePreview)
+	}
+}
+
+func TestDetailAnyStatus(t *testing.T) {
+	todoPath, notesDir := writeTestTodo(t, sampleTasks)
+	for _, ref := range []string{"1", "2", "3"} {
+		if _, err := Detail(DetailOptions{TodoPath: todoPath, NotesDir: notesDir, Ref: ref}); err != nil {
+			t.Errorf("detail %s: %v", ref, err)
+		}
+	}
+}
+
+func TestDetailNotFound(t *testing.T) {
+	todoPath, notesDir := writeTestTodo(t, sampleTasks)
+	if _, err := Detail(DetailOptions{TodoPath: todoPath, NotesDir: notesDir, Ref: "999"}); err == nil {
+		t.Error("detail of missing task: expected error")
+	}
+}
+
+func TestDetailDoesNotMutate(t *testing.T) {
+	todoPath, notesDir := writeTestTodo(t, sampleTasks)
+	_, hdrBefore, err := parseTodoFile(todoPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Detail(DetailOptions{TodoPath: todoPath, NotesDir: notesDir, Ref: "1"}); err != nil {
+		t.Fatal(err)
+	}
+	_, hdrAfter, err := parseTodoFile(todoPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hdrBefore.lastUpdated != hdrAfter.lastUpdated {
+		t.Errorf("last_updated changed from %q to %q", hdrBefore.lastUpdated, hdrAfter.lastUpdated)
+	}
+}

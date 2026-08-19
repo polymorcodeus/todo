@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -57,6 +58,9 @@ func describeStatus(s Status) string {
 		return "unknown"
 	}
 }
+
+// Description returns a human-readable description of the status.
+func (s Status) Description() string { return describeStatus(s) }
 
 // Priority is the tri-level importance of a task.
 type Priority string
@@ -517,6 +521,16 @@ func (t Task) AgeDays() int {
 	return int(now.Sub(claimed).Hours() / 24)
 }
 
+// OpenedDays returns the number of full days since the task was opened.
+func (t Task) OpenedDays() int {
+	opened, err := time.Parse("2006-01-02", t.Opened)
+	if err != nil {
+		return -1
+	}
+	now := now().Truncate(24 * time.Hour)
+	return int(now.Sub(opened).Hours() / 24)
+}
+
 func parseTodoFile(path string) ([]Task, header, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -647,4 +661,98 @@ func NotePath(notesDir, id string) (string, bool) {
 		return path, false
 	}
 	return path, true
+}
+
+// DetailOptions configures Detail.
+type DetailOptions struct {
+	TodoPath string
+	NotesDir string
+	Ref      string
+	Lines    int  // max note lines to preview; <=0 means unlimited
+	NoNote   bool // skip note preview
+}
+
+// DetailResult is the read-only result of Detail.
+type DetailResult struct {
+	Task          Task
+	NotePath      string
+	NoteExists    bool
+	NotePreview   string // first Lines lines of the note, if any
+	NoteTruncated bool   // true when more lines exist beyond the preview
+}
+
+// Detail returns full information about a single task plus a preview of its
+// companion note. It never mutates the todo file or header.
+func Detail(opts DetailOptions) (DetailResult, error) {
+	tasks, _, err := parseTodoFile(opts.TodoPath)
+	if err != nil {
+		return DetailResult{}, fmt.Errorf("read todo file: %w", err)
+	}
+
+	idx, err := findTaskIndex(tasks, opts.Ref)
+	if err != nil {
+		return DetailResult{}, err
+	}
+
+	task := tasks[idx]
+	notePath, exists := NotePath(opts.NotesDir, task.ID)
+	if !exists {
+		notePath = filepath.Join(opts.NotesDir, task.ID+".md")
+	}
+
+	res := DetailResult{
+		Task:       task,
+		NotePath:   notePath,
+		NoteExists: exists,
+	}
+
+	if !opts.NoNote && exists {
+		preview, truncated, err := readNotePreview(notePath, opts.Lines)
+		if err != nil {
+			return DetailResult{}, fmt.Errorf("read note: %w", err)
+		}
+		res.NotePreview = preview
+		res.NoteTruncated = truncated
+	}
+
+	return res, nil
+}
+
+// readNotePreview reads up to lines from path. A lines value <= 0 means no
+// limit. It returns the preview text and whether more content follows.
+func readNotePreview(path string, lines int) (string, bool, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", false, err
+	}
+	//nolint:errcheck // read-only file; close error not meaningful here
+	defer f.Close()
+
+	r := bufio.NewReader(f)
+	var out []string
+	for i := 0; ; i++ {
+		if lines > 0 && i >= lines {
+			// Read one extra line to detect whether content was truncated.
+			_, err := r.ReadString('\n')
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				return "", false, err
+			}
+			return strings.Join(out, "\n"), true, nil
+		}
+
+		line, err := r.ReadString('\n')
+		if line != "" {
+			out = append(out, strings.TrimSuffix(line, "\n"))
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return "", false, err
+		}
+	}
+	return strings.Join(out, "\n"), false, nil
 }

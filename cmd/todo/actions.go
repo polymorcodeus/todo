@@ -159,7 +159,7 @@ func runList(cmd *cli.Command, cfg appConfig, opts listOptions) error {
 	for _, t := range tasks {
 		age := "-"
 		if t.AgeDays() >= 0 {
-			age = fmt.Sprintf("%dd", t.AgeDays())
+			age = fmt.Sprintf("%d day/s", t.AgeDays())
 		}
 		_, _ = fmt.Fprintf(w, "[%s]\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			t.Status, t.ID, t.Priority, t.Opened, dashIfEmpty(t.Claimed), age, t.Summary)
@@ -180,6 +180,110 @@ func runPickup(cmd *cli.Command, cfg appConfig) error {
 		return exitError(err)
 	}
 	printTaskLine(outWriter(cmd), res.Line, res.Note)
+	return nil
+}
+
+// detailOptions carries the flag values for the detail command.
+type detailOptions struct {
+	lines  int
+	noNote bool
+	asJSON bool
+}
+
+// jsonDetail is the machine-readable representation of a task detail.
+type jsonDetail struct {
+	ID                   string `json:"id"`
+	Status               string `json:"status"`
+	Priority             string `json:"priority"`
+	Opened               string `json:"opened"`
+	OpenedDays           int    `json:"opened_days"`
+	Claimed              string `json:"claimed,omitempty"`
+	AgeDays              *int   `json:"age_days,omitempty"`
+	Summary              string `json:"summary"`
+	NotePath             string `json:"note_path"`
+	NoteExists           bool   `json:"note_exists"`
+	NotePreview          string `json:"note_preview,omitempty"`
+	NotePreviewTruncated bool   `json:"note_preview_truncated,omitempty"`
+}
+
+func runDetail(cmd *cli.Command, cfg appConfig, opts detailOptions) error {
+	ref, err := requireTaskRef(cmd)
+	if err != nil {
+		return exitError(err)
+	}
+
+	lines := opts.lines
+	if lines <= 0 {
+		lines = 20
+	}
+
+	res, err := todo.Detail(todo.DetailOptions{
+		TodoPath: cfg.todoPath,
+		NotesDir: cfg.notesDir,
+		Ref:      ref,
+		Lines:    lines,
+		NoNote:   opts.noNote,
+	})
+	if err != nil {
+		return exitError(err)
+	}
+
+	out := outWriter(cmd)
+	if opts.asJSON {
+		jd := jsonDetail{
+			ID:          res.Task.ID,
+			Status:      string(res.Task.Status),
+			Priority:    string(res.Task.Priority),
+			Opened:      res.Task.Opened,
+			OpenedDays:  res.Task.OpenedDays(),
+			Claimed:     res.Task.Claimed,
+			Summary:     res.Task.Summary,
+			NotePath:    res.NotePath,
+			NoteExists:  res.NoteExists,
+			NotePreview: res.NotePreview,
+		}
+		if res.NotePreview != "" {
+			jd.NotePreviewTruncated = res.NoteTruncated
+		}
+		if age := res.Task.AgeDays(); age >= 0 {
+			jd.AgeDays = &age
+		}
+		enc := json.NewEncoder(out)
+		enc.SetIndent("", "  ")
+		return enc.Encode(jd)
+	}
+
+	claimed := "-"
+	if res.Task.Claimed != "" {
+		if age := res.Task.AgeDays(); age >= 0 {
+			claimed = fmt.Sprintf("%s (%d day/s)", res.Task.Claimed, age)
+		} else {
+			claimed = res.Task.Claimed
+		}
+	}
+
+	_, _ = fmt.Fprintf(out, "%s (priority: %s)\n", res.Task.ID, res.Task.Priority)
+	_, _ = fmt.Fprintf(out, "status: %s | opened: %s (%d day/s) | claimed: %s\n",
+		res.Task.Status.Description(), res.Task.Opened, res.Task.OpenedDays(), claimed)
+	_, _ = fmt.Fprintln(out)
+	_, _ = fmt.Fprintln(out, "summary:")
+	_, _ = fmt.Fprintln(out, res.Task.Summary)
+	_, _ = fmt.Fprintln(out)
+
+	if res.NoteExists {
+		_, _ = fmt.Fprintf(out, "note: %s\n", res.NotePath)
+		if res.NotePreview != "" {
+			for i, line := range strings.Split(res.NotePreview, "\n") {
+				_, _ = fmt.Fprintf(out, "  %d | %s\n", i+1, line)
+			}
+			if res.NoteTruncated {
+				_, _ = fmt.Fprintln(out, "  ...")
+			}
+		}
+	} else {
+		_, _ = fmt.Fprintln(out, "note: none")
+	}
+
 	return nil
 }
 

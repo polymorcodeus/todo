@@ -173,7 +173,7 @@ func newApp() *cli.Command {
 						&cli.IntFlag{
 							Name:        "stale",
 							Destination: &stale,
-							Usage:       "only show claimed tasks older than N days",
+							Usage:       "only show claimed tasks older than N day/s",
 						},
 						&cli.StringFlag{
 							Name:        "state",
@@ -216,6 +216,43 @@ func newApp() *cli.Command {
 					return runRemove(cmd, cfg)
 				},
 			},
+			func() *cli.Command {
+				var (
+					lines  int
+					noNote bool
+					asJSON bool
+				)
+				return &cli.Command{
+					Name:      "detail",
+					Usage:     "show detailed information for a task, including a note preview",
+					ArgsUsage: "<task>",
+					Flags: []cli.Flag{
+						&cli.IntFlag{
+							Name:        "lines",
+							Value:       20,
+							Destination: &lines,
+							Usage:       "number of note lines to preview",
+						},
+						&cli.BoolFlag{
+							Name:        "no-note",
+							Destination: &noNote,
+							Usage:       "skip the companion note preview",
+						},
+						&cli.BoolFlag{
+							Name:        "json",
+							Destination: &asJSON,
+							Usage:       "output machine-readable JSON",
+						},
+					},
+					Action: func(ctx context.Context, cmd *cli.Command) error {
+						return runDetail(cmd, cfg, detailOptions{
+							lines:  lines,
+							noNote: noNote,
+							asJSON: asJSON,
+						})
+					},
+				}
+			}(),
 			func() *cli.Command {
 				var clear, park bool
 				return &cli.Command{
