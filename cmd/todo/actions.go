@@ -274,10 +274,10 @@ func runDetail(cmd *cli.Command, cfg appConfig, opts detailOptions) error {
 		_, _ = fmt.Fprintf(out, "note: %s\n", res.NotePath)
 		if res.NotePreview != "" {
 			for i, line := range strings.Split(res.NotePreview, "\n") {
-				_, _ = fmt.Fprintf(out, "  %d | %s\n", i+1, line)
+				_, _ = fmt.Fprintf(out, "  %2d | %s\n", i+1, line)
 			}
 			if res.NoteTruncated {
-				_, _ = fmt.Fprintln(out, "  ...")
+				_, _ = fmt.Fprintln(out, "       ...")
 			}
 		}
 	} else {

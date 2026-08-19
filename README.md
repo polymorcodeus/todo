@@ -32,8 +32,12 @@ todo add -n --note-file ./draft.md "task"   # ...or copy an existing file (not m
 todo add --dry-run -s "x" -n "task"         # preview the would-be line + note, no write
 todo list                                   # list tasks (alias: todo ls)
 todo list --state open                      # filter by status: open|progress|done
-todo list --stale 5                         # only claimed tasks older than 5 days
+todo list --stale 5                         # only claimed tasks older than 5 day/s
 todo list --json                            # machine-readable JSON output
+todo detail TSK-001                         # show task details + 20-line note preview
+todo detail --lines 5 TSK-001               # preview first 5 lines of the note
+todo detail --no-note TSK-001               # show task details without note preview
+todo detail --json TSK-001                  # machine-readable detail output
 todo pickup TSK-001                         # mark a task in progress (adds claimed date)
 todo release TSK-001                        # release a picked-up task back to open (drop claim)
 todo complete TSK-001                       # mark a task done (drops claimed)
