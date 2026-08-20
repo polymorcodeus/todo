@@ -62,6 +62,21 @@ func describeStatus(s Status) string {
 // Description returns a human-readable description of the status.
 func (s Status) Description() string { return describeStatus(s) }
 
+// StatusName returns the canonical status designation used in machine-readable
+// output: "open", "in progress", or "complete".
+func (s Status) StatusName() string {
+	switch s {
+	case StatusOpen:
+		return "open"
+	case StatusInProgress:
+		return "in progress"
+	case StatusDone:
+		return "complete"
+	default:
+		return "unknown"
+	}
+}
+
 // Priority is the tri-level importance of a task.
 type Priority string
 

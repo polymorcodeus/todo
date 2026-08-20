@@ -78,6 +78,19 @@ Status is `[ ]` open, `[o]` in progress, `[x]` done. `claimed:` records when a t
 
 `next_id:` is a monotonic high-water mark: `add` never reuses it, so removing all tasks still lets new tasks resume at the next ID rather than restarting at TSK-001. It is backfilled automatically on any write, so files created before this field existed converge without manual action.
 
+## JSON output
+
+Both `todo list --json` and `todo detail --json` emit stable, machine-readable JSON.
+
+- `status`: canonical status designation (`open`, `in progress`, `complete`)
+- `status_symbol`: raw checkbox character (` `, `o`, `x`)
+
+`todo list --json` returns an array of tasks with fields: `id`, `status`, `status_symbol`, `priority`, `opened`, `claimed`, `age_days`, `summary`.
+
+`todo detail --json` returns a single object with fields: `id`, `status`, `status_symbol`, `priority`, `opened`, `opened_days`, `claimed`, `age_days`, `summary`, `note_path`, `note_exists`, `note_preview`, `note_preview_truncated`.
+
+`claimed`, `age_days`, `note_preview`, and `note_preview_truncated` are omitted when empty or not applicable.
+
 ## Development
 
 ```sh

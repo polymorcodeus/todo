@@ -194,6 +194,7 @@ type detailOptions struct {
 type jsonDetail struct {
 	ID                   string `json:"id"`
 	Status               string `json:"status"`
+	StatusSymbol         string `json:"status_symbol"`
 	Priority             string `json:"priority"`
 	Opened               string `json:"opened"`
 	OpenedDays           int    `json:"opened_days"`
@@ -231,16 +232,17 @@ func runDetail(cmd *cli.Command, cfg appConfig, opts detailOptions) error {
 	out := outWriter(cmd)
 	if opts.asJSON {
 		jd := jsonDetail{
-			ID:          res.Task.ID,
-			Status:      string(res.Task.Status),
-			Priority:    string(res.Task.Priority),
-			Opened:      res.Task.Opened,
-			OpenedDays:  res.Task.OpenedDays(),
-			Claimed:     res.Task.Claimed,
-			Summary:     res.Task.Summary,
-			NotePath:    res.NotePath,
-			NoteExists:  res.NoteExists,
-			NotePreview: res.NotePreview,
+			ID:           res.Task.ID,
+			Status:       res.Task.Status.StatusName(),
+			StatusSymbol: string(res.Task.Status),
+			Priority:     string(res.Task.Priority),
+			Opened:       res.Task.Opened,
+			OpenedDays:   res.Task.OpenedDays(),
+			Claimed:      res.Task.Claimed,
+			Summary:      res.Task.Summary,
+			NotePath:     res.NotePath,
+			NoteExists:   res.NoteExists,
+			NotePreview:  res.NotePreview,
 		}
 		if res.NotePreview != "" {
 			jd.NotePreviewTruncated = res.NoteTruncated
@@ -375,13 +377,14 @@ func dashIfEmpty(s string) string {
 
 // jsonTask is the machine-readable representation of a task for --json.
 type jsonTask struct {
-	ID       string `json:"id"`
-	Status   string `json:"status"`
-	Priority string `json:"priority"`
-	Opened   string `json:"opened"`
-	Claimed  string `json:"claimed,omitempty"`
-	AgeDays  *int   `json:"age_days,omitempty"`
-	Summary  string `json:"summary"`
+	ID           string `json:"id"`
+	Status       string `json:"status"`
+	StatusSymbol string `json:"status_symbol"`
+	Priority     string `json:"priority"`
+	Opened       string `json:"opened"`
+	Claimed      string `json:"claimed,omitempty"`
+	AgeDays      *int   `json:"age_days,omitempty"`
+	Summary      string `json:"summary"`
 }
 
 // writeJSON emits tasks as a JSON array of stable, documented fields.
@@ -389,12 +392,13 @@ func writeJSON(out io.Writer, tasks []todo.Task) error {
 	outTasks := make([]jsonTask, 0, len(tasks))
 	for _, t := range tasks {
 		jt := jsonTask{
-			ID:       t.ID,
-			Status:   string(t.Status),
-			Priority: string(t.Priority),
-			Opened:   t.Opened,
-			Claimed:  t.Claimed,
-			Summary:  t.Summary,
+			ID:           t.ID,
+			Status:       t.Status.StatusName(),
+			StatusSymbol: string(t.Status),
+			Priority:     string(t.Priority),
+			Opened:       t.Opened,
+			Claimed:      t.Claimed,
+			Summary:      t.Summary,
 		}
 		if age := t.AgeDays(); age >= 0 {
 			jt.AgeDays = &age
