@@ -977,3 +977,103 @@ func TestDetailDoesNotMutate(t *testing.T) {
 		t.Errorf("last_updated changed from %q to %q", hdrBefore.lastUpdated, hdrAfter.lastUpdated)
 	}
 }
+
+func TestRemoveWithNoteDelete(t *testing.T) {
+	todoPath, notesDir := writeTestTodo(t, sampleTasks)
+	if err := os.MkdirAll(notesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	notePath := filepath.Join(notesDir, "TSK-003.md")
+	if err := os.WriteFile(notePath, []byte("note"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := Remove(RefOptions{TodoPath: todoPath, NotesDir: notesDir, Ref: "TSK-003"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(notesDir, "TSK-003.md"); res.Note != want {
+		t.Errorf("note = %q, want %q", res.Note, want)
+	}
+
+	// Remove itself does not delete the note; it only reports the path.
+	if _, err := os.Stat(notePath); err != nil {
+		t.Errorf("Remove deleted the note: %v", err)
+	}
+}
+
+func TestReopen(t *testing.T) {
+	fixed := time.Date(2026, 8, 18, 10, 30, 0, 0, time.UTC)
+	setNow(func() time.Time { return fixed })
+	defer setNow(time.Now)
+
+	todoPath, notesDir := writeTestTodo(t, sampleTasks)
+
+	res, err := Reopen(RefOptions{TodoPath: todoPath, NotesDir: notesDir, Ref: "TSK-003"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.NoOp {
+		t.Error("reopen of done task reported no-op")
+	}
+	if !strings.HasPrefix(res.Line, "- [ ] [TSK-003]") {
+		t.Errorf("reopen line = %q, want open [ ] TSK-003", res.Line)
+	}
+	if strings.Contains(res.Line, "claimed") {
+		t.Errorf("reopen line still has claimed: %q", res.Line)
+	}
+
+	after := readTasks(t, todoPath)
+	if after[2].Status != StatusOpen || after[2].Claimed != "" {
+		t.Errorf("task after reopen = %q, want open with no claim", after[2].String())
+	}
+
+	_, hdr, err := parseTodoFile(todoPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hdr.lastUpdated == "2026-01-01T00:00" {
+		t.Error("last_updated not updated by reopen")
+	}
+}
+
+func TestReopenNoOp(t *testing.T) {
+	todoPath, notesDir := writeTestTodo(t, sampleTasks)
+
+	res, err := Reopen(RefOptions{TodoPath: todoPath, NotesDir: notesDir, Ref: "TSK-001"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.NoOp {
+		t.Error("reopen of open task did not report no-op")
+	}
+	if !strings.HasPrefix(res.Line, "- [ ] [TSK-001]") {
+		t.Errorf("no-op reopen line = %q, want original open line", res.Line)
+	}
+
+	_, hdr, err := parseTodoFile(todoPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hdr.lastUpdated != "2026-01-01T00:00" {
+		t.Error("no-op reopen mutated last_updated")
+	}
+}
+
+func TestReopenNotFound(t *testing.T) {
+	todoPath, notesDir := writeTestTodo(t, sampleTasks)
+	if _, err := Reopen(RefOptions{TodoPath: todoPath, NotesDir: notesDir, Ref: "999"}); err == nil {
+		t.Error("reopen of missing task: expected error")
+	}
+}
+
+func TestReopenInProgress(t *testing.T) {
+	todoPath, notesDir := writeTestTodo(t, sampleTasks)
+	if _, err := Reopen(RefOptions{TodoPath: todoPath, NotesDir: notesDir, Ref: "TSK-002"}); err == nil {
+		t.Error("reopen of in-progress task: expected error")
+	}
+	tasks := readTasks(t, todoPath)
+	if tasks[1].Status != StatusInProgress {
+		t.Error("failed reopen mutated state")
+	}
+}

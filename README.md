@@ -44,17 +44,20 @@ todo complete TSK-001                       # mark a task done (drops claimed)
 todo complete --clear TSK-001               # remove the task line entirely
 todo complete --park TSK-001                # done + print the companion note path
 todo remove TSK-001                         # remove a task line by ref (any status, e.g. [x])
+todo remove --note TSK-001                  # ...and delete its companion note file
+todo reopen TSK-001                         # restore a completed [x] task to open [ ]
 ```
 
-Task references accept `TSK-001`, `TSK-001`, `001`, `1`, or `#1`.
+Task references accept `TSK-001`, `tsk-001`, `001`, `1`, or `#1`.
 
 State rules:
 
 - `pickup` only works on an open `[ ]` task.
 - `complete` only works on an in-progress `[o]` task (i.e. one you picked up).
 - `release` also only works on an in-progress `[o]` task; it returns it to `[ ]` and drops the claim.
-- `remove` works on any status line (including `[x]` done lines) and deletes it.
-- `pickup` records the `claimed:` date; `complete`/`release` drop it.
+- `remove` works on any status line (including `[x]` done lines) and deletes it; `--note` also deletes the companion note file.
+- `reopen` works on a completed `[x]` task and restores it to `[ ]`; it is a no-op if the task is already open.
+- `pickup` records the `claimed:` date; `complete`/`release`/`reopen` drop it.
 
 ## Data layout
 

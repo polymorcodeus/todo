@@ -157,3 +157,62 @@ func TestDetailJSON(t *testing.T) {
 		t.Errorf("summary = %q, want detail task", detail.Summary)
 	}
 }
+
+func TestRemoveNoteFlag(t *testing.T) {
+	setupGitRepo(t)
+
+	if _, _, err := runApp(t, []string{"init"}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if _, _, err := runApp(t, []string{"add", "--create-note", "note task"}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+
+	if _, err := os.Stat(".todo/notes/TSK-001.md"); err != nil {
+		t.Fatalf("note not created: %v", err)
+	}
+
+	out, _, err := runApp(t, []string{"remove", "--note", "TSK-001"})
+	if err != nil {
+		t.Fatalf("remove --note: %v", err)
+	}
+	if !strings.Contains(out, "TSK-001") {
+		t.Errorf("remove output = %q, want TSK-001", out)
+	}
+	if _, err := os.Stat(".todo/notes/TSK-001.md"); !os.IsNotExist(err) {
+		t.Errorf("note still exists after remove --note: %v", err)
+	}
+}
+
+func TestReopen(t *testing.T) {
+	setupGitRepo(t)
+
+	if _, _, err := runApp(t, []string{"init"}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if _, _, err := runApp(t, []string{"add", "reopen task"}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if _, _, err := runApp(t, []string{"pickup", "TSK-001"}); err != nil {
+		t.Fatalf("pickup: %v", err)
+	}
+	if _, _, err := runApp(t, []string{"complete", "TSK-001"}); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+
+	out, _, err := runApp(t, []string{"reopen", "TSK-001"})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	if !strings.Contains(out, "[ ]") {
+		t.Errorf("reopen output = %q, want open checkbox", out)
+	}
+
+	out, _, err = runApp(t, []string{"list", "--json"})
+	if err != nil {
+		t.Fatalf("list --json: %v", err)
+	}
+	if strings.Contains(out, "complete") {
+		t.Errorf("task still complete after reopen: %q", out)
+	}
+}

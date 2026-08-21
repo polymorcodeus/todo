@@ -44,6 +44,11 @@ type completeOptions struct {
 	park  bool
 }
 
+// removeOptions carries the flag values for the remove command.
+type removeOptions struct {
+	deleteNote bool
+}
+
 func outWriter(cmd *cli.Command) io.Writer {
 	if cmd.Root().Writer != nil {
 		return cmd.Root().Writer
@@ -302,7 +307,25 @@ func runRelease(cmd *cli.Command, cfg appConfig) error {
 	return nil
 }
 
-func runRemove(cmd *cli.Command, cfg appConfig) error {
+func runReopen(cmd *cli.Command, cfg appConfig) error {
+	ref, err := requireTaskRef(cmd)
+	if err != nil {
+		return exitError(err)
+	}
+	res, err := todo.Reopen(todo.RefOptions{TodoPath: cfg.todoPath, NotesDir: cfg.notesDir, Ref: ref})
+	if err != nil {
+		return exitError(err)
+	}
+	out := outWriter(cmd)
+	if res.NoOp {
+		_, _ = fmt.Fprintf(out, "%s is already open\n", res.Line)
+		return nil
+	}
+	printTaskLine(out, res.Line, res.Note)
+	return nil
+}
+
+func runRemove(cmd *cli.Command, cfg appConfig, opts removeOptions) error {
 	ref, err := requireTaskRef(cmd)
 	if err != nil {
 		return exitError(err)
@@ -310,6 +333,11 @@ func runRemove(cmd *cli.Command, cfg appConfig) error {
 	res, err := todo.Remove(todo.RefOptions{TodoPath: cfg.todoPath, NotesDir: cfg.notesDir, Ref: ref})
 	if err != nil {
 		return exitError(err)
+	}
+	if opts.deleteNote && res.Note != "" {
+		if err := os.Remove(res.Note); err != nil && !os.IsNotExist(err) {
+			return exitError(fmt.Errorf("delete note: %w", err))
+		}
 	}
 	printTaskLine(outWriter(cmd), res.Line, res.Note)
 	return nil

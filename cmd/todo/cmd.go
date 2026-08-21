@@ -208,14 +208,32 @@ func newApp() *cli.Command {
 				},
 			},
 			{
-				Name:      "remove",
-				Aliases:   []string{"rm"},
-				Usage:     "remove a task line by reference (any status)",
+				Name:      "reopen",
+				Usage:     "reopen a completed task (restore it to open status)",
 				ArgsUsage: "<task>",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
-					return runRemove(cmd, cfg)
+					return runReopen(cmd, cfg)
 				},
 			},
+			func() *cli.Command {
+				var deleteNote bool
+				return &cli.Command{
+					Name:      "remove",
+					Aliases:   []string{"rm"},
+					Usage:     "remove a task line by reference (any status)",
+					ArgsUsage: "<task>",
+					Flags: []cli.Flag{
+						&cli.BoolFlag{
+							Name:        "note",
+							Destination: &deleteNote,
+							Usage:       "also delete the companion note file",
+						},
+					},
+					Action: func(ctx context.Context, cmd *cli.Command) error {
+						return runRemove(cmd, cfg, removeOptions{deleteNote: deleteNote})
+					},
+				}
+			}(),
 			func() *cli.Command {
 				var (
 					lines  int

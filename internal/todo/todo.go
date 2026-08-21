@@ -388,6 +388,48 @@ func Release(opts RefOptions) (Result, error) {
 	return writeUpdated(opts.TodoPath, h, tasks, idx, opts.NotesDir)
 }
 
+// ReopenResult describes the outcome of Reopen. NoOp is true when the task
+// was already open and no write was performed.
+type ReopenResult struct {
+	Result
+	NoOp bool
+}
+
+// Reopen restores a completed task to open status. It is a no-op when the task
+// is already open and an error when the task is not done (except for the
+// already-open no-op case).
+func Reopen(opts RefOptions) (ReopenResult, error) {
+	tasks, h, err := parseTodoFile(opts.TodoPath)
+	if err != nil {
+		return ReopenResult{}, fmt.Errorf("read todo file: %w", err)
+	}
+
+	idx, err := findTaskIndex(tasks, opts.Ref)
+	if err != nil {
+		return ReopenResult{}, err
+	}
+
+	note, exists := NotePath(opts.NotesDir, tasks[idx].ID)
+	if !exists {
+		note = ""
+	}
+
+	if tasks[idx].Status == StatusOpen {
+		return ReopenResult{Result: Result{Line: tasks[idx].String(), Note: note}, NoOp: true}, nil
+	}
+	if tasks[idx].Status != StatusDone {
+		return ReopenResult{}, fmt.Errorf("cannot reopen %s: task is %s", tasks[idx].ID, describeStatus(tasks[idx].Status))
+	}
+
+	tasks[idx].Status = StatusOpen
+	tasks[idx].Claimed = ""
+	res, err := writeUpdated(opts.TodoPath, h, tasks, idx, opts.NotesDir)
+	if err != nil {
+		return ReopenResult{}, err
+	}
+	return ReopenResult{Result: res}, nil
+}
+
 // Remove deletes the referenced task line regardless of its status and returns
 // the removed line (unchanged) plus the full path of its companion note, if any.
 // Remove deletes the referenced task line regardless of its status and returns
