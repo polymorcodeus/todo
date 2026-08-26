@@ -335,7 +335,7 @@ func runRemove(cmd *cli.Command, cfg appConfig, opts removeOptions) error {
 		return exitError(err)
 	}
 	if opts.deleteNote && res.Note != "" {
-		if err := os.Remove(res.Note); err != nil && !os.IsNotExist(err) {
+		if err := fs.RemoveFollowingSymlink(res.Note); err != nil {
 			return exitError(fmt.Errorf("delete note: %w", err))
 		}
 	}

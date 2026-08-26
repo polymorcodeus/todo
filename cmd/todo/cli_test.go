@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -181,6 +182,43 @@ func TestRemoveNoteFlag(t *testing.T) {
 	}
 	if _, err := os.Stat(".todo/notes/TSK-001.md"); !os.IsNotExist(err) {
 		t.Errorf("note still exists after remove --note: %v", err)
+	}
+}
+
+func TestRemoveNoteFlagFollowsSymlink(t *testing.T) {
+	setupGitRepo(t)
+
+	if _, _, err := runApp(t, []string{"init"}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if _, _, err := runApp(t, []string{"add", "--create-note", "note task"}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+
+	// Simulate lnk project-scope: replace the note file with a symlink whose
+	// target lives outside .todo (the "store").
+	notePath := filepath.Join(".todo", "notes", "TSK-001.md")
+	target := filepath.Join(t.TempDir(), "TSK-001.md")
+	if err := os.WriteFile(target, []byte("note"), 0o644); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	if err := os.Remove(notePath); err != nil {
+		t.Fatalf("remove note: %v", err)
+	}
+	if err := os.Symlink(target, notePath); err != nil {
+		t.Fatalf("symlink note: %v", err)
+	}
+
+	if _, _, err := runApp(t, []string{"remove", "--note", "TSK-001"}); err != nil {
+		t.Fatalf("remove --note: %v", err)
+	}
+
+	// The store target must be gone, and no dangling link may remain.
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Errorf("store target still exists after remove --note: %v", err)
+	}
+	if _, err := os.Lstat(notePath); !os.IsNotExist(err) {
+		t.Errorf("note link still exists after remove --note: %v", err)
 	}
 }
 
