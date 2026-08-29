@@ -254,3 +254,81 @@ func TestReopen(t *testing.T) {
 		t.Errorf("task still complete after reopen: %q", out)
 	}
 }
+
+func TestBumpUp(t *testing.T) {
+	setupGitRepo(t)
+
+	if _, _, err := runApp(t, []string{"init"}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if _, _, err := runApp(t, []string{"add", "-p", "low", "bump test"}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+
+	out, _, err := runApp(t, []string{"bump", "TSK-001"})
+	if err != nil {
+		t.Fatalf("bump: %v", err)
+	}
+	if !strings.Contains(out, "[priority:med]") {
+		t.Errorf("bump output = %q, want priority:med", out)
+	}
+
+	out, _, err = runApp(t, []string{"bump", "TSK-001"})
+	if err != nil {
+		t.Fatalf("bump: %v", err)
+	}
+	if !strings.Contains(out, "[priority:high]") {
+		t.Errorf("bump output = %q, want priority:high", out)
+	}
+}
+
+func TestBumpDown(t *testing.T) {
+	setupGitRepo(t)
+
+	if _, _, err := runApp(t, []string{"init"}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if _, _, err := runApp(t, []string{"add", "-p", "high", "bump test"}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+
+	out, _, err := runApp(t, []string{"bump", "--down", "TSK-001"})
+	if err != nil {
+		t.Fatalf("bump --down: %v", err)
+	}
+	if !strings.Contains(out, "[priority:med]") {
+		t.Errorf("bump --down output = %q, want priority:med", out)
+	}
+}
+
+func TestBumpNoOp(t *testing.T) {
+	setupGitRepo(t)
+
+	if _, _, err := runApp(t, []string{"init"}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if _, _, err := runApp(t, []string{"add", "-p", "high", "bump test"}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+
+	out, _, err := runApp(t, []string{"bump", "TSK-001"})
+	if err != nil {
+		t.Fatalf("bump: %v", err)
+	}
+	if !strings.Contains(out, "already at the up boundary") {
+		t.Errorf("bump output = %q, want boundary message", out)
+	}
+}
+
+func TestBumpNotFound(t *testing.T) {
+	setupGitRepo(t)
+
+	if _, _, err := runApp(t, []string{"init"}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+
+	_, _, err := runApp(t, []string{"bump", "TSK-999"})
+	if err == nil {
+		t.Fatal("bump of missing task: expected error")
+	}
+}

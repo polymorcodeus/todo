@@ -307,6 +307,28 @@ func runRelease(cmd *cli.Command, cfg appConfig) error {
 	return nil
 }
 
+func runBump(cmd *cli.Command, cfg appConfig, down bool) error {
+	ref, err := requireTaskRef(cmd)
+	if err != nil {
+		return exitError(err)
+	}
+	res, err := todo.Bump(cfg.todoPath, cfg.notesDir, ref, down)
+	if err != nil {
+		return exitError(err)
+	}
+	out := outWriter(cmd)
+	if res.NoOp {
+		dir := "up"
+		if down {
+			dir = "down"
+		}
+		_, _ = fmt.Fprintf(out, "%s is already at the %s boundary\n", res.Line, dir)
+		return nil
+	}
+	printTaskLine(out, res.Line, res.Note)
+	return nil
+}
+
 func runReopen(cmd *cli.Command, cfg appConfig) error {
 	ref, err := requireTaskRef(cmd)
 	if err != nil {

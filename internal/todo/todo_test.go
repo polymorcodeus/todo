@@ -1077,3 +1077,197 @@ func TestReopenInProgress(t *testing.T) {
 		t.Error("failed reopen mutated state")
 	}
 }
+
+func TestBumpPriority(t *testing.T) {
+	for _, tc := range []struct {
+		in   Priority
+		down bool
+		want Priority
+	}{
+		{PriorityLow, false, PriorityMed},
+		{PriorityMed, false, PriorityHigh},
+		{PriorityHigh, false, PriorityHigh},
+		{PriorityHigh, true, PriorityMed},
+		{PriorityMed, true, PriorityLow},
+		{PriorityLow, true, PriorityLow},
+	} {
+		got := bumpPriority(tc.in, tc.down)
+		if got != tc.want {
+			dir := "up"
+			if tc.down {
+				dir = "down"
+			}
+			t.Errorf("bumpPriority(%q, %s) = %q, want %q", tc.in, dir, got, tc.want)
+		}
+	}
+}
+
+func TestBumpUp(t *testing.T) {
+	fixed := time.Date(2026, 8, 18, 10, 30, 0, 0, time.UTC)
+	setNow(func() time.Time { return fixed })
+	defer setNow(time.Now)
+
+	todoPath, notesDir := writeTestTodo(t, sampleTasks)
+
+	// Bump TSK-003: low -> med
+	res, err := Bump(todoPath, notesDir, "TSK-003", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.NoOp {
+		t.Error("bump low task reported no-op")
+	}
+	if !strings.Contains(res.Line, "[priority:med]") {
+		t.Errorf("bump line = %q, want priority:med", res.Line)
+	}
+
+	tasks := readTasks(t, todoPath)
+	if tasks[2].Priority != PriorityMed {
+		t.Errorf("TSK-003 priority = %q, want med", tasks[2].Priority)
+	}
+
+	// Bump TSK-003 again: med -> high
+	res, err = Bump(todoPath, notesDir, "TSK-003", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.NoOp {
+		t.Error("bump med task reported no-op")
+	}
+	if !strings.Contains(res.Line, "[priority:high]") {
+		t.Errorf("bump line = %q, want priority:high", res.Line)
+	}
+
+	// Bump TSK-003 again: already high -> no-op
+	res, err = Bump(todoPath, notesDir, "TSK-003", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.NoOp {
+		t.Error("bump high task did not report no-op")
+	}
+	if !strings.Contains(res.Line, "[priority:high]") {
+		t.Errorf("no-op bump line = %q, still want priority:high", res.Line)
+	}
+
+	_, hdr, err := parseTodoFile(todoPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hdr.lastUpdated == "2026-01-01T00:00" {
+		t.Error("last_updated not updated by bump")
+	}
+}
+
+func TestBumpDown(t *testing.T) {
+	fixed := time.Date(2026, 8, 18, 10, 30, 0, 0, time.UTC)
+	setNow(func() time.Time { return fixed })
+	defer setNow(time.Now)
+
+	todoPath, notesDir := writeTestTodo(t, sampleTasks)
+
+	// Bump TSK-001: high -> med
+	res, err := Bump(todoPath, notesDir, "TSK-001", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.NoOp {
+		t.Error("bump high down reported no-op")
+	}
+	if !strings.Contains(res.Line, "[priority:med]") {
+		t.Errorf("bump line = %q, want priority:med", res.Line)
+	}
+
+	// Bump TSK-001 again: med -> low
+	res, err = Bump(todoPath, notesDir, "TSK-001", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.NoOp {
+		t.Error("bump med down reported no-op")
+	}
+	if !strings.Contains(res.Line, "[priority:low]") {
+		t.Errorf("bump line = %q, want priority:low", res.Line)
+	}
+
+	// Bump TSK-001 again: already low -> no-op
+	res, err = Bump(todoPath, notesDir, "TSK-001", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.NoOp {
+		t.Error("bump low down did not report no-op")
+	}
+	if !strings.Contains(res.Line, "[priority:low]") {
+		t.Errorf("no-op bump line = %q, still want priority:low", res.Line)
+	}
+}
+
+func TestBumpNoOpDoesNotWrite(t *testing.T) {
+	todoPath, notesDir := writeTestTodo(t, sampleTasks)
+
+	_, hdrBefore, err := parseTodoFile(todoPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// TSK-001 is already high; bump up should be no-op without writing.
+	res, err := Bump(todoPath, notesDir, "TSK-001", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.NoOp {
+		t.Error("bump high up did not report no-op")
+	}
+
+	_, hdrAfter, err := parseTodoFile(todoPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hdrBefore.lastUpdated != hdrAfter.lastUpdated {
+		t.Error("no-op bump mutated last_updated")
+	}
+}
+
+func TestBumpNotFound(t *testing.T) {
+	todoPath, notesDir := writeTestTodo(t, sampleTasks)
+	if _, err := Bump(todoPath, notesDir, "999", false); err == nil {
+		t.Error("bump of missing task: expected error")
+	}
+}
+
+func TestBumpAnyStatus(t *testing.T) {
+	fixed := time.Date(2026, 8, 18, 10, 30, 0, 0, time.UTC)
+	setNow(func() time.Time { return fixed })
+	defer setNow(time.Now)
+
+	todoPath, notesDir := writeTestTodo(t, sampleTasks)
+
+	// Bump should work on open, in-progress, and done tasks.
+	for _, ref := range []string{"TSK-001", "TSK-002", "TSK-003"} {
+		if _, err := Bump(todoPath, notesDir, ref, false); err != nil {
+			t.Errorf("bump %s: %v", ref, err)
+		}
+	}
+}
+
+func TestBumpWithNote(t *testing.T) {
+	todoPath, notesDir := writeTestTodo(t, sampleTasks)
+	if err := os.MkdirAll(notesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(notesDir, "TSK-003.md"), []byte("note"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := Bump(todoPath, notesDir, "TSK-003", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.NoOp {
+		t.Error("bump low up reported no-op")
+	}
+	if want := filepath.Join(notesDir, "TSK-003.md"); res.Note != want {
+		t.Errorf("note = %q, want %q", res.Note, want)
+	}
+}

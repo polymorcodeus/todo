@@ -461,6 +461,69 @@ func Remove(opts RefOptions) (Result, error) {
 	return Result{Line: line, Note: note}, nil
 }
 
+// BumpResult describes the outcome of Bump. NoOp is true when the task was
+// already at the boundary (high when bumping up, low when bumping down) and
+// no write was performed.
+type BumpResult struct {
+	Result
+	NoOp bool
+}
+
+// Bump changes a task's priority up or down by one level. Bumping up when
+// already high, or down when already low, is a no-op that returns the current
+// line without writing.
+func Bump(todoPath, notesDir, ref string, down bool) (BumpResult, error) {
+	tasks, h, err := parseTodoFile(todoPath)
+	if err != nil {
+		return BumpResult{}, fmt.Errorf("read todo file: %w", err)
+	}
+
+	idx, err := findTaskIndex(tasks, ref)
+	if err != nil {
+		return BumpResult{}, err
+	}
+
+	note, exists := NotePath(notesDir, tasks[idx].ID)
+	if !exists {
+		note = ""
+	}
+
+	next := bumpPriority(tasks[idx].Priority, down)
+	if next == tasks[idx].Priority {
+		return BumpResult{Result: Result{Line: tasks[idx].String(), Note: note}, NoOp: true}, nil
+	}
+
+	tasks[idx].Priority = next
+	res, err := writeUpdated(todoPath, h, tasks, idx, notesDir)
+	if err != nil {
+		return BumpResult{}, err
+	}
+	return BumpResult{Result: res}, nil
+}
+
+// bumpPriority returns the next priority level: up goes low→med→high→high,
+// down goes high→med→low→low.
+func bumpPriority(p Priority, down bool) Priority {
+	if down {
+		switch p {
+		case PriorityHigh:
+			return PriorityMed
+		case PriorityMed:
+			return PriorityLow
+		default:
+			return PriorityLow
+		}
+	}
+	switch p {
+	case PriorityLow:
+		return PriorityMed
+	case PriorityMed:
+		return PriorityHigh
+	default:
+		return PriorityHigh
+	}
+}
+
 // writeUpdated persists tasks after a status change and returns the updated
 // line and note for the task at idx.
 // writeUpdated persists tasks after a status change and returns the updated

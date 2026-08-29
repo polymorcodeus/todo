@@ -216,6 +216,24 @@ func newApp() *cli.Command {
 				},
 			},
 			func() *cli.Command {
+				var down bool
+				return &cli.Command{
+					Name:      "bump",
+					Usage:     "bump a task's priority up or down by one level",
+					ArgsUsage: "<task>",
+					Flags: []cli.Flag{
+						&cli.BoolFlag{
+							Name:        "down",
+							Destination: &down,
+							Usage:       "bump priority down instead of up",
+						},
+					},
+					Action: func(ctx context.Context, cmd *cli.Command) error {
+						return runBump(cmd, cfg, down)
+					},
+				}
+			}(),
+			func() *cli.Command {
 				var deleteNote bool
 				return &cli.Command{
 					Name:      "remove",
