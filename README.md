@@ -46,6 +46,8 @@ todo complete --park TSK-001                # done + print the companion note pa
 todo remove TSK-001                         # remove a task line by ref (any status, e.g. [x])
 todo remove --note TSK-001                  # ...and delete its companion note file
 todo reopen TSK-001                         # restore a completed [x] task to open [ ]
+todo bump TSK-001                           # bump priority up: low->med, med->high, high->(no-op)
+todo bump --down TSK-001                    # bump priority down: high->med, med->low, low->(no-op)
 ```
 
 Task references accept `TSK-001`, `tsk-001`, `001`, `1`, or `#1`.
@@ -57,6 +59,7 @@ State rules:
 - `release` also only works on an in-progress `[o]` task; it returns it to `[ ]` and drops the claim.
 - `remove` works on any status line (including `[x]` done lines) and deletes it; `--note` also deletes the companion note file.
 - `reopen` works on a completed `[x]` task and restores it to `[ ]`; it is a no-op if the task is already open.
+- `bump` works on any task regardless of status; it cycles priority up (`low->med->high->no-op`) or down (`high->med->low->no-op`) via `--down`. No-op at boundaries writes nothing.
 - `pickup` records the `claimed:` date; `complete`/`release`/`reopen` drop it.
 
 ## Data layout
