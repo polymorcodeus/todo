@@ -6,7 +6,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 
+	"github.com/polymorcodeus/park/schema"
 	validation "github.com/urfave/cli-validation"
 	"github.com/urfave/cli/v3"
 
@@ -82,6 +84,10 @@ func newApp() *cli.Command {
 					noteContent string
 					noteFile    string
 					dryRun      bool
+					kind        string
+					category    string
+					synopsis    string
+					source      string
 				)
 				noteContentFlag := &cli.StringFlag{
 					Name:        "note-content",
@@ -92,6 +98,28 @@ func newApp() *cli.Command {
 					Name:        "note-file",
 					Destination: &noteFile,
 					Usage:       "copy an existing file into the note (copy, not move)",
+				}
+				kindFlag := &cli.StringFlag{
+					Name:        "kind",
+					Destination: &kind,
+					Usage:       "note disposition marker (work-order)",
+					Validator:   validation.Enum("work-order"),
+				}
+				categoryFlag := &cli.StringFlag{
+					Name:        "category",
+					Destination: &category,
+					Usage:       "park record category (" + strings.Join(schema.Categories(), ", ") + ")",
+					Validator:   validation.Enum(schema.Categories()...),
+				}
+				synopsisFlag := &cli.StringFlag{
+					Name:        "synopsis",
+					Destination: &synopsis,
+					Usage:       "park record one-line synopsis",
+				}
+				sourceFlag := &cli.StringFlag{
+					Name:        "source",
+					Destination: &source,
+					Usage:       "park record source (e.g. repo or chat)",
 				}
 				return &cli.Command{
 					Name:      "add",
@@ -120,6 +148,10 @@ func newApp() *cli.Command {
 						},
 						noteContentFlag,
 						noteFileFlag,
+						kindFlag,
+						categoryFlag,
+						synopsisFlag,
+						sourceFlag,
 						&cli.BoolFlag{
 							Name:        "dry-run",
 							Destination: &dryRun,
@@ -134,6 +166,13 @@ func newApp() *cli.Command {
 							// be set.
 							Flags: [][]cli.Flag{{noteContentFlag}, {noteFileFlag}},
 						},
+						{
+							Category: "note disposition",
+							// --kind (work-order) and the record flags are
+							// alternative dispositions; category/synopsis/source
+							// may be set together as a record.
+							Flags: [][]cli.Flag{{kindFlag}, {categoryFlag, synopsisFlag, sourceFlag}},
+						},
 					},
 					Action: func(ctx context.Context, cmd *cli.Command) error {
 						return runAdd(cmd, cfg, addOptions{
@@ -143,6 +182,10 @@ func newApp() *cli.Command {
 							noteContent: noteContent,
 							noteFile:    noteFile,
 							dryRun:      dryRun,
+							kind:        kind,
+							category:    category,
+							synopsis:    synopsis,
+							source:      source,
 						})
 					},
 				}

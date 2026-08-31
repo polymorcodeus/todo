@@ -30,6 +30,8 @@ todo add -n --note-content "body" "task"    # create a note with content
 echo "body" | todo add -n "task"            # ...or read note content from stdin
 todo add -n --note-file ./draft.md "task"   # ...or copy an existing file (not move)
 todo add --dry-run -s "x" -n "task"         # preview the would-be line + note, no write
+todo add -n --kind work-order "task"        # note is a disposable work order
+todo add -n --category areas --synopsis "one line" --source repo "task"  # note is a park record
 todo list                                   # list tasks (alias: todo ls)
 todo list --state open                      # filter by status: open|progress|done
 todo list --stale 5                         # only claimed tasks older than 5 day/s
@@ -84,6 +86,15 @@ Status is `[ ]` open, `[o]` in progress, `[x]` done. `claimed:` records when a t
 
 `next_id:` is a monotonic high-water mark: `add` never reuses it, so removing all tasks still lets new tasks resume at the next ID rather than restarting at TSK-001. It is backfilled automatically on any write, so files created before this field existed converge without manual action.
 
+## Note disposition
+
+Every companion note carries a write-time disposition in its frontmatter so clear-time tooling knows whether to preserve, delete, or float it:
+
+- **record** (default): park-native frontmatter with `category`, `created`, `source`, and `synopsis`. Stamped by `--category`/`--synopsis`/`--source`; without any disposition flags it defaults to `category: areas` so notes are never silently dropped.
+- **work order**: `kind: work-order`, stamped by `--kind work-order`.
+
+`todo detail --json` exposes the derived `disposition` field: `park` (has `category`), `work-order` (has `kind: work-order`), or `float` (neither, including notes with no frontmatter).
+
 ## JSON output
 
 Both `todo list --json` and `todo detail --json` emit stable, machine-readable JSON.
@@ -93,7 +104,7 @@ Both `todo list --json` and `todo detail --json` emit stable, machine-readable J
 
 `todo list --json` returns an array of tasks with fields: `id`, `status`, `status_symbol`, `priority`, `opened`, `claimed`, `age_days`, `summary`.
 
-`todo detail --json` returns a single object with fields: `id`, `status`, `status_symbol`, `priority`, `opened`, `opened_days`, `claimed`, `age_days`, `summary`, `note_path`, `note_exists`, `note_preview`, `note_preview_truncated`.
+`todo detail --json` returns a single object with fields: `id`, `status`, `status_symbol`, `priority`, `opened`, `opened_days`, `claimed`, `age_days`, `summary`, `disposition`, `note_path`, `note_exists`, `note_preview`, `note_preview_truncated`.
 
 `claimed`, `age_days`, `note_preview`, and `note_preview_truncated` are omitted when empty or not applicable.
 

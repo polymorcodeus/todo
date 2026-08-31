@@ -193,6 +193,15 @@ type AddOptions struct {
 	NoteContent string // content to write into the note; empty means empty note
 	NoteFile    string // path to an existing file to copy into the note (copy, not move)
 	DryRun      bool   // preview what would be written without persisting
+
+	// Note disposition flags. Kind "work-order" stamps a disposable marker;
+	// Category/Synopsis/Source stamp park record frontmatter (the default when
+	// no disposition flags are given). These are ignored when CreateNote is
+	// false.
+	Kind     string
+	Category string
+	Synopsis string
+	Source   string
 }
 
 func Add(opts AddOptions) (AddResult, error) {
@@ -235,6 +244,10 @@ func Add(opts AddOptions) (AddResult, error) {
 				return AddResult{}, fmt.Errorf("read note file: %w", err)
 			}
 			content = string(data)
+		}
+		content, err = buildNoteContent(content, opts.Kind, opts.Category, opts.Synopsis, opts.Source, opts.Summary, task.Opened)
+		if err != nil {
+			return AddResult{}, err
 		}
 		result.NoteContent = content
 	}
@@ -797,8 +810,9 @@ type DetailResult struct {
 	Task          Task
 	NotePath      string
 	NoteExists    bool
-	NotePreview   string // first Lines lines of the note, if any
-	NoteTruncated bool   // true when more lines exist beyond the preview
+	Disposition   Disposition // park, work-order, or float; float when no note
+	NotePreview   string      // first Lines lines of the note, if any
+	NoteTruncated bool        // true when more lines exist beyond the preview
 }
 
 // Detail returns full information about a single task plus a preview of its
@@ -821,9 +835,18 @@ func Detail(opts DetailOptions) (DetailResult, error) {
 	}
 
 	res := DetailResult{
-		Task:       task,
-		NotePath:   notePath,
-		NoteExists: exists,
+		Task:        task,
+		NotePath:    notePath,
+		NoteExists:  exists,
+		Disposition: DispositionFloat,
+	}
+
+	if exists {
+		disp, err := NoteDisposition(notePath)
+		if err != nil {
+			return DetailResult{}, fmt.Errorf("read note disposition: %w", err)
+		}
+		res.Disposition = disp
 	}
 
 	if !opts.NoNote && exists {

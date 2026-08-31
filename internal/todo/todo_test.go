@@ -472,8 +472,9 @@ func TestAddDryRun(t *testing.T) {
 	if want := filepath.Join(notesDir, "TSK-001.md"); result.NotePath != want {
 		t.Errorf("dry run note path = %q, want %q", result.NotePath, want)
 	}
-	if result.NoteContent != "note body" {
-		t.Errorf("dry run note content = %q, want %q", result.NoteContent, "note body")
+	wantContent := "---\ncategory: areas\ncreated: 2026-08-18\nsource: repo\nsynopsis: x\n---\n\nnote body\n"
+	if result.NoteContent != wantContent {
+		t.Errorf("dry run note content = %q, want %q", result.NoteContent, wantContent)
 	}
 
 	// Nothing persisted: no todo file change and no note file on disk.
@@ -486,6 +487,10 @@ func TestAddDryRun(t *testing.T) {
 }
 
 func TestAddNoteContent(t *testing.T) {
+	fixed := time.Date(2026, 8, 18, 10, 30, 0, 0, time.UTC)
+	setNow(func() time.Time { return fixed })
+	defer setNow(time.Now)
+
 	todoPath, notesDir := writeTestTodo(t, nil)
 
 	result, err := Add(AddOptions{
@@ -506,12 +511,17 @@ func TestAddNoteContent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(data) != "hello\nworld" {
-		t.Errorf("note content = %q, want %q", string(data), "hello\nworld")
+	want := "---\ncategory: areas\ncreated: 2026-08-18\nsource: repo\nsynopsis: with note\n---\n\nhello\nworld\n"
+	if string(data) != want {
+		t.Errorf("note content = %q, want %q", string(data), want)
 	}
 }
 
 func TestAddNoteFileCopy(t *testing.T) {
+	fixed := time.Date(2026, 8, 18, 10, 30, 0, 0, time.UTC)
+	setNow(func() time.Time { return fixed })
+	defer setNow(time.Now)
+
 	todoPath, notesDir := writeTestTodo(t, nil)
 	src := filepath.Join(t.TempDir(), "src.md")
 	if err := os.WriteFile(src, []byte("from file"), 0o644); err != nil {
@@ -533,8 +543,9 @@ func TestAddNoteFileCopy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(data) != "from file" {
-		t.Errorf("note content = %q, want %q", string(data), "from file")
+	want := "---\ncategory: areas\ncreated: 2026-08-18\nsource: repo\nsynopsis: copy note\n---\n\nfrom file\n"
+	if string(data) != want {
+		t.Errorf("note content = %q, want %q", string(data), want)
 	}
 	// Copy, not move: source still present.
 	if _, err := os.Stat(src); err != nil {
@@ -1269,5 +1280,174 @@ func TestBumpWithNote(t *testing.T) {
 	}
 	if want := filepath.Join(notesDir, "TSK-003.md"); res.Note != want {
 		t.Errorf("note = %q, want %q", res.Note, want)
+	}
+}
+
+func TestAddNoteWorkOrder(t *testing.T) {
+	fixed := time.Date(2026, 8, 18, 10, 30, 0, 0, time.UTC)
+	setNow(func() time.Time { return fixed })
+	defer setNow(time.Now)
+
+	todoPath, notesDir := writeTestTodo(t, nil)
+
+	_, err := Add(AddOptions{
+		TodoPath:    todoPath,
+		NotesDir:    notesDir,
+		Priority:    "med",
+		Summary:     "work order task",
+		CreateNote:  true,
+		NoteContent: "body text",
+		Kind:        "work-order",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(notesDir, "TSK-001.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "---\nkind: work-order\n---\n\nbody text"
+	if string(data) != want {
+		t.Errorf("note content = %q, want %q", string(data), want)
+	}
+}
+
+func TestAddNoteRecordFrontmatter(t *testing.T) {
+	fixed := time.Date(2026, 8, 18, 10, 30, 0, 0, time.UTC)
+	setNow(func() time.Time { return fixed })
+	defer setNow(time.Now)
+
+	todoPath, notesDir := writeTestTodo(t, nil)
+
+	_, err := Add(AddOptions{
+		TodoPath:    todoPath,
+		NotesDir:    notesDir,
+		Priority:    "med",
+		Summary:     "record task",
+		CreateNote:  true,
+		NoteContent: "body text",
+		Category:    "areas",
+		Synopsis:    "a synopsis",
+		Source:      "repo",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(notesDir, "TSK-001.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "---\ncategory: areas\ncreated: 2026-08-18\nsource: repo\nsynopsis: a synopsis\n---\n\nbody text\n"
+	if string(data) != want {
+		t.Errorf("note content = %q, want %q", string(data), want)
+	}
+}
+
+func TestAddNoteInvalidCategory(t *testing.T) {
+	todoPath, notesDir := writeTestTodo(t, nil)
+
+	_, err := Add(AddOptions{
+		TodoPath:   todoPath,
+		NotesDir:   notesDir,
+		Priority:   "med",
+		Summary:    "bad category",
+		CreateNote: true,
+		Category:   "nonsense",
+	})
+	if err == nil {
+		t.Fatal("Add with invalid category: expected error")
+	}
+	if len(readTasks(t, todoPath)) != 0 {
+		t.Error("invalid add wrote a task")
+	}
+}
+
+func TestNoteDisposition(t *testing.T) {
+	dir := t.TempDir()
+	notesDir := filepath.Join(dir, ".todo", "notes")
+	if err := os.MkdirAll(notesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name    string
+		content string
+		want    Disposition
+	}{
+		{
+			name:    "park record",
+			content: "---\ncategory: areas\ncreated: 2026-08-18\nsource: repo\nsynopsis: x\n---\n\nbody\n",
+			want:    DispositionPark,
+		},
+		{
+			name:    "work order",
+			content: "---\nkind: work-order\n---\n\nbody\n",
+			want:    DispositionWorkOrder,
+		},
+		{
+			name:    "no frontmatter",
+			content: "# Heading\n\nbody\n",
+			want:    DispositionFloat,
+		},
+		{
+			name:    "unknown kind",
+			content: "---\nkind: other\n---\n\nbody\n",
+			want:    DispositionFloat,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(notesDir, tc.name+".md")
+			if err := os.WriteFile(path, []byte(tc.content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			got, err := NoteDisposition(path)
+			if err != nil {
+				t.Fatalf("NoteDisposition(%q): %v", path, err)
+			}
+			if got != tc.want {
+				t.Errorf("NoteDisposition(%q) = %q, want %q", path, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestDetailDisposition(t *testing.T) {
+	todoPath, notesDir := writeTestTodo(t, sampleTasks)
+	if err := os.MkdirAll(notesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// A record note yields park; a work-order note yields work-order.
+	if err := os.WriteFile(filepath.Join(notesDir, "TSK-001.md"), []byte("---\ncategory: areas\n---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(notesDir, "TSK-002.md"), []byte("---\nkind: work-order\n---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := Detail(DetailOptions{TodoPath: todoPath, NotesDir: notesDir, Ref: "1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Disposition != DispositionPark {
+		t.Errorf("TSK-001 disposition = %q, want park", res.Disposition)
+	}
+
+	res, err = Detail(DetailOptions{TodoPath: todoPath, NotesDir: notesDir, Ref: "2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Disposition != DispositionWorkOrder {
+		t.Errorf("TSK-002 disposition = %q, want work-order", res.Disposition)
+	}
+
+	// No note defaults to float.
+	res, err = Detail(DetailOptions{TodoPath: todoPath, NotesDir: notesDir, Ref: "3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Disposition != DispositionFloat {
+		t.Errorf("TSK-003 disposition = %q, want float", res.Disposition)
 	}
 }

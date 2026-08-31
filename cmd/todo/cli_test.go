@@ -372,3 +372,75 @@ func TestSchema(t *testing.T) {
 		}
 	}
 }
+
+func TestAddNoteDispositionFlags(t *testing.T) {
+	setupGitRepo(t)
+
+	if _, _, err := runApp(t, []string{"init"}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+
+	// Work-order note.
+	if _, _, err := runApp(t, []string{"add", "-n", "--kind", "work-order", "--note-content", "body", "work order"}); err != nil {
+		t.Fatalf("add work-order: %v", err)
+	}
+	data, err := os.ReadFile(".todo/notes/TSK-001.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "---\nkind: work-order\n---\n\nbody"; string(data) != want {
+		t.Errorf("work-order note = %q, want %q", string(data), want)
+	}
+
+	// Record note.
+	if _, _, err := runApp(t, []string{"add", "-n", "--category", "areas", "--synopsis", "syn", "--source", "repo", "--note-content", "body", "record"}); err != nil {
+		t.Fatalf("add record: %v", err)
+	}
+	data, err = os.ReadFile(".todo/notes/TSK-002.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(data), "---\ncategory: areas\ncreated: ") {
+		t.Errorf("record note prefix = %q", string(data))
+	}
+	if !strings.HasSuffix(string(data), "\nsource: repo\nsynopsis: syn\n---\n\nbody\n") {
+		t.Errorf("record note suffix = %q", string(data))
+	}
+}
+
+func TestDetailJSONDisposition(t *testing.T) {
+	setupGitRepo(t)
+
+	if _, _, err := runApp(t, []string{"init"}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if _, _, err := runApp(t, []string{"add", "-n", "--kind", "work-order", "--note-content", "body", "disposition task"}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+
+	out, _, err := runApp(t, []string{"detail", "TSK-001", "--json"})
+	if err != nil {
+		t.Fatalf("detail --json: %v", err)
+	}
+
+	var detail jsonDetail
+	if err := json.Unmarshal([]byte(out), &detail); err != nil {
+		t.Fatalf("parse detail json: %v", err)
+	}
+	if detail.Disposition != "work-order" {
+		t.Errorf("disposition = %q, want work-order", detail.Disposition)
+	}
+}
+
+func TestAddDispositionRequiresNote(t *testing.T) {
+	setupGitRepo(t)
+
+	if _, _, err := runApp(t, []string{"init"}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+
+	_, _, err := runApp(t, []string{"add", "--category", "areas", "no note"})
+	if err == nil {
+		t.Fatal("disposition flag without --note: expected error")
+	}
+}

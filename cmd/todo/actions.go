@@ -29,6 +29,10 @@ type addOptions struct {
 	noteContent string
 	noteFile    string
 	dryRun      bool
+	kind        string
+	category    string
+	synopsis    string
+	source      string
 }
 
 // listOptions carries the flag values for the list command.
@@ -71,6 +75,11 @@ func runAdd(cmd *cli.Command, cfg appConfig, opts addOptions) error {
 		return exitError(errors.New("task summary required: provide as first argument or --summary"))
 	}
 
+	// Disposition flags only make sense when a note is being created.
+	if !opts.create && (opts.kind != "" || opts.category != "" || opts.synopsis != "" || opts.source != "") {
+		return exitError(errors.New("note disposition flags (--kind/--category/--synopsis/--source) require --note"))
+	}
+
 	// Resolve note content: --note-content (or '-') takes precedence, then
 	// --note-file copy (handled internally by Add), else read note content
 	// from stdin.
@@ -92,6 +101,10 @@ func runAdd(cmd *cli.Command, cfg appConfig, opts addOptions) error {
 		NoteContent: content,
 		NoteFile:    opts.noteFile,
 		DryRun:      opts.dryRun,
+		Kind:        opts.kind,
+		Category:    opts.category,
+		Synopsis:    opts.synopsis,
+		Source:      opts.source,
 	})
 	if err != nil {
 		return exitError(err)
@@ -206,6 +219,7 @@ type jsonDetail struct {
 	Claimed              string `json:"claimed,omitempty"`
 	AgeDays              *int   `json:"age_days,omitempty"`
 	Summary              string `json:"summary"`
+	Disposition          string `json:"disposition"`
 	NotePath             string `json:"note_path"`
 	NoteExists           bool   `json:"note_exists"`
 	NotePreview          string `json:"note_preview,omitempty"`
@@ -245,6 +259,7 @@ func runDetail(cmd *cli.Command, cfg appConfig, opts detailOptions) error {
 			OpenedDays:   res.Task.OpenedDays(),
 			Claimed:      res.Task.Claimed,
 			Summary:      res.Task.Summary,
+			Disposition:  string(res.Disposition),
 			NotePath:     res.NotePath,
 			NoteExists:   res.NoteExists,
 			NotePreview:  res.NotePreview,
