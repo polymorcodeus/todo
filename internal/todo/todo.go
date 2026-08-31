@@ -63,13 +63,13 @@ func describeStatus(s Status) string {
 func (s Status) Description() string { return describeStatus(s) }
 
 // StatusName returns the canonical status designation used in machine-readable
-// output: "open", "in progress", or "complete".
+// output: "open", "in_progress", or "complete".
 func (s Status) StatusName() string {
 	switch s {
 	case StatusOpen:
 		return "open"
 	case StatusInProgress:
-		return "in progress"
+		return "in_progress"
 	case StatusDone:
 		return "complete"
 	default:

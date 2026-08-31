@@ -405,6 +405,21 @@ func printTaskLine(out io.Writer, line, note string) {
 	}
 }
 
+// runSchema prints the current list --json schema contract: the version and
+// the stable status enum values.
+func runSchema(out io.Writer) error {
+	type schemaOutput struct {
+		SchemaVersion int      `json:"schema_version"`
+		StatusEnum    []string `json:"status_enum"`
+	}
+	enc := json.NewEncoder(out)
+	enc.SetIndent("", "  ")
+	return enc.Encode(schemaOutput{
+		SchemaVersion: 1,
+		StatusEnum:    []string{"open", "in_progress", "complete"},
+	})
+}
+
 // parseState maps the --state flag value to a task Status filter.
 func parseState(s string) todo.Status {
 	switch s {
@@ -437,7 +452,15 @@ type jsonTask struct {
 	Summary      string `json:"summary"`
 }
 
-// writeJSON emits tasks as a JSON array of stable, documented fields.
+// jsonListEnvelope wraps the list --json output in a versioned contract so
+// consumers can detect schema drift.
+type jsonListEnvelope struct {
+	SchemaVersion int        `json:"schema_version"`
+	Tasks         []jsonTask `json:"tasks"`
+}
+
+// writeJSON emits tasks in a versioned envelope with a stable schema for
+// machine consumers.
 func writeJSON(out io.Writer, tasks []todo.Task) error {
 	outTasks := make([]jsonTask, 0, len(tasks))
 	for _, t := range tasks {
@@ -457,5 +480,8 @@ func writeJSON(out io.Writer, tasks []todo.Task) error {
 	}
 	enc := json.NewEncoder(out)
 	enc.SetIndent("", "  ")
-	return enc.Encode(outTasks)
+	return enc.Encode(jsonListEnvelope{
+		SchemaVersion: 1,
+		Tasks:         outTasks,
+	})
 }

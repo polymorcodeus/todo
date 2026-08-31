@@ -101,10 +101,17 @@ func TestListJSON(t *testing.T) {
 		t.Fatalf("list --json: %v", err)
 	}
 
-	var tasks []jsonTask
-	if err := json.Unmarshal([]byte(out), &tasks); err != nil {
+	var envelope struct {
+		SchemaVersion int        `json:"schema_version"`
+		Tasks         []jsonTask `json:"tasks"`
+	}
+	if err := json.Unmarshal([]byte(out), &envelope); err != nil {
 		t.Fatalf("parse list json: %v", err)
 	}
+	if envelope.SchemaVersion != 1 {
+		t.Errorf("schema_version = %d, want 1", envelope.SchemaVersion)
+	}
+	tasks := envelope.Tasks
 	if len(tasks) != 1 {
 		t.Fatalf("got %d tasks, want 1", len(tasks))
 	}
@@ -148,8 +155,8 @@ func TestDetailJSON(t *testing.T) {
 	if detail.ID != "TSK-001" {
 		t.Errorf("id = %q, want TSK-001", detail.ID)
 	}
-	if detail.Status != "in progress" {
-		t.Errorf("status = %q, want in progress", detail.Status)
+	if detail.Status != "in_progress" {
+		t.Errorf("status = %q, want in_progress", detail.Status)
 	}
 	if detail.StatusSymbol != "o" {
 		t.Errorf("status_symbol = %q, want o", detail.StatusSymbol)
@@ -330,5 +337,38 @@ func TestBumpNotFound(t *testing.T) {
 	_, _, err := runApp(t, []string{"bump", "TSK-999"})
 	if err == nil {
 		t.Fatal("bump of missing task: expected error")
+	}
+}
+
+func TestSchema(t *testing.T) {
+	setupGitRepo(t)
+
+	if _, _, err := runApp(t, []string{"init"}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+
+	out, _, err := runApp(t, []string{"schema"})
+	if err != nil {
+		t.Fatalf("schema: %v", err)
+	}
+
+	var result struct {
+		SchemaVersion int      `json:"schema_version"`
+		StatusEnum    []string `json:"status_enum"`
+	}
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("parse schema json: %v", err)
+	}
+	if result.SchemaVersion != 1 {
+		t.Errorf("schema_version = %d, want 1", result.SchemaVersion)
+	}
+	want := []string{"open", "in_progress", "complete"}
+	if len(result.StatusEnum) != len(want) {
+		t.Fatalf("status_enum = %v, want %v", result.StatusEnum, want)
+	}
+	for i, v := range result.StatusEnum {
+		if v != want[i] {
+			t.Errorf("status_enum[%d] = %q, want %q", i, v, want[i])
+		}
 	}
 }

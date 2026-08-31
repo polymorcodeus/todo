@@ -316,6 +316,13 @@ func newApp() *cli.Command {
 					},
 				}
 			}(),
+			{
+				Name:  "schema",
+				Usage: "print the current list --json schema version and status enum",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					return runSchema(outWriter(cmd))
+				},
+			},
 		},
 	}
 }
