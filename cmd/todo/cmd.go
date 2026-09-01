@@ -181,10 +181,12 @@ func newApp() *cli.Command {
 			},
 			func() *cli.Command {
 				var (
-					asJSON bool
-					state  string
-					stale  int
-					all    bool
+					asJSON      bool
+					state       string
+					stale       int
+					all         bool
+					sort        string
+					sortReverse bool
 				)
 				return &cli.Command{
 					Name:    "list",
@@ -212,13 +214,26 @@ func newApp() *cli.Command {
 							Usage:       "filter by status: open, progress, done",
 							Validator:   validation.Enum("open", "progress", "done"),
 						},
+						&cli.StringFlag{
+							Name:        "sort",
+							Destination: &sort,
+							Usage:       "sort by: priority, opened, claimed, age",
+							Validator:   validation.Enum("priority", "opened", "claimed", "age"),
+						},
+						&cli.BoolFlag{
+							Name:        "reverse",
+							Destination: &sortReverse,
+							Usage:       "reverse sort order",
+						},
 					},
 					Action: func(ctx context.Context, cmd *cli.Command) error {
 						opts := listOptions{
-							asJSON: asJSON,
-							all:    all,
-							state:  state,
-							stale:  stale,
+							asJSON:      asJSON,
+							all:         all,
+							state:       state,
+							stale:       stale,
+							sort:        sort,
+							sortReverse: sortReverse,
 						}
 						if all {
 							return runList(cmd, appConfig{}, opts)
@@ -381,6 +396,30 @@ func newApp() *cli.Command {
 							clear: clear,
 							park:  park,
 						})
+					},
+				}
+			}(),
+			func() *cli.Command {
+				var all bool
+				return &cli.Command{
+					Name:  "clear",
+					Usage: "clear completed tasks by note disposition",
+					Flags: []cli.Flag{
+						&cli.BoolFlag{
+							Name:        "all",
+							Destination: &all,
+							Usage:       "clear completed tasks across all registered repos",
+						},
+					},
+					Action: func(ctx context.Context, cmd *cli.Command) error {
+						if all {
+							return runClear(cmd, appConfig{}, clearOptions{all: true})
+						}
+						cfg, err := requireRepoConfig()
+						if err != nil {
+							return exitError(err)
+						}
+						return runClear(cmd, cfg, clearOptions{all: false})
 					},
 				}
 			}(),

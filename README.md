@@ -36,9 +36,12 @@ todo add "an over-long summary (over 120 chars) ..."                    # long s
 todo list                                   # list tasks (alias: todo ls)
 todo list --state open                      # filter by status: open|progress|done
 todo list --stale 5                         # only claimed tasks older than 5 day/s
+todo list --sort priority                   # sort by priority, opened, claimed, or age
+todo list --sort opened --reverse           # newest first
 todo list --json                            # machine-readable JSON output
 todo list --all                             # list tasks across all registered repos
 todo list --all --json                      # ...with repo_path/repo_project and disposition
+todo list --all --sort priority             # sort global results
 todo doctor                                 # report stale/unregistered registry entries
 todo doctor --all                           # scan every registered repo directory downward
 todo doctor --fix                           # drop stale entries and register missing repos
@@ -52,6 +55,8 @@ todo release TSK-001                        # release a picked-up task back to o
 todo complete TSK-001                       # mark a task done (drops claimed)
 todo complete --clear TSK-001               # remove the task line entirely
 todo complete --park TSK-001                # done + print the companion note path
+todo clear                                  # bulk-clear completed tasks by note disposition
+todo clear --all                            # ...across all registered repos
 todo remove TSK-001                         # remove a task line by ref (any status, e.g. [x])
 todo remove --note TSK-001                  # ...and delete its companion note file
 todo reopen TSK-001                         # restore a completed [x] task to open [ ]
@@ -103,6 +108,14 @@ Every companion note carries a write-time disposition in its frontmatter so clea
 
 - **record** (default): park-native frontmatter with `category`, `created`, `source`, and `synopsis`. Stamped by `--category`/`--synopsis`/`--source`; without any disposition flags it defaults to `category: areas` so notes are never silently dropped.
 - **work order**: `kind: work-order`, stamped by `--kind work-order`.
+
+`todo clear` bulk-removes completed `[x]` tasks based on that disposition:
+
+- `work-order`: remove the task line and delete the disposable note.
+- `park`: remove the task line but keep the park record note.
+- `float` (no recognized disposition, including no note): leave the task line and list it for review.
+
+`todo clear --all` applies the same rules across every registered repo. The registry is updated by `todo init` and reconciled with `todo doctor`.
 
 Summaries longer than 120 characters are truncated on the task line (with a trailing `...`) and spilled into a `kind: work-order` note so the full text is preserved. When no note is requested, that note is created automatically.
 

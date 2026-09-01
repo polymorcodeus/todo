@@ -3,6 +3,7 @@ package todo
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -444,6 +445,62 @@ func TestCompleteDropsClaimed(t *testing.T) {
 	}
 }
 
+func TestClearByDisposition(t *testing.T) {
+	todoPath, notesDir := writeTestTodo(t, []Task{
+		{ID: "TSK-001", Priority: "high", Opened: "2026-08-01", Status: StatusDone, Summary: "work order task"},
+		{ID: "TSK-002", Priority: "med", Opened: "2026-08-02", Status: StatusDone, Summary: "park task"},
+		{ID: "TSK-003", Priority: "low", Opened: "2026-08-03", Status: StatusDone, Summary: "float task"},
+		{ID: "TSK-004", Priority: "low", Opened: "2026-08-04", Status: StatusOpen, Summary: "open task"},
+	})
+	if err := os.MkdirAll(notesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(notesDir, "TSK-001.md"), []byte("---\nkind: work-order\n---\n\nbody"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(notesDir, "TSK-002.md"), []byte("---\ncategory: areas\ncreated: 2026-08-02\nsource: repo\nsynopsis: park\n---\n\nbody"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// TSK-003 has no note -> float.
+
+	res, err := Clear(todoPath, notesDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(res.RemovedWorkOrder) != 1 || res.RemovedWorkOrder[0] != "TSK-001" {
+		t.Errorf("removed work-order = %v, want [TSK-001]", res.RemovedWorkOrder)
+	}
+	if len(res.Parked) != 1 || res.Parked[0] != "TSK-002" {
+		t.Errorf("parked = %v, want [TSK-002]", res.Parked)
+	}
+	if len(res.Float) != 1 || res.Float[0] != "TSK-003" {
+		t.Errorf("float = %v, want [TSK-003]", res.Float)
+	}
+
+	tasks := readTasks(t, todoPath)
+	ids := make([]string, len(tasks))
+	for i, t := range tasks {
+		ids[i] = t.ID
+	}
+	want := []string{"TSK-003", "TSK-004"}
+	if len(ids) != len(want) {
+		t.Fatalf("remaining tasks = %v, want %v", ids, want)
+	}
+	for i := range want {
+		if ids[i] != want[i] {
+			t.Errorf("remaining task %d = %q, want %q", i, ids[i], want[i])
+		}
+	}
+
+	if _, err := os.Stat(filepath.Join(notesDir, "TSK-001.md")); !os.IsNotExist(err) {
+		t.Errorf("work-order note not deleted: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(notesDir, "TSK-002.md")); err != nil {
+		t.Errorf("park note deleted: %v", err)
+	}
+}
+
 func TestAddDryRun(t *testing.T) {
 	fixed := time.Date(2026, 8, 18, 10, 30, 0, 0, time.UTC)
 	setNow(func() time.Time { return fixed })
@@ -598,6 +655,114 @@ func TestListFilterStale(t *testing.T) {
 	if len(tasks) != 1 || tasks[0].ID != "TSK-010" {
 		t.Errorf("stale filter = %+v, want only TSK-010", tasks)
 	}
+}
+
+func TestListSortPriority(t *testing.T) {
+	todoPath, _ := writeTestTodo(t, []Task{
+		{ID: "TSK-001", Priority: "high", Opened: "2026-08-01", Status: StatusOpen, Summary: "a"},
+		{ID: "TSK-002", Priority: "med", Opened: "2026-08-02", Status: StatusOpen, Summary: "b"},
+		{ID: "TSK-003", Priority: "low", Opened: "2026-08-03", Status: StatusOpen, Summary: "c"},
+	})
+
+	tasks, err := List(todoPath, ListFilter{SortField: SortFieldPriority})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := taskIDs(tasks); !slices.Equal(got, []string{"TSK-003", "TSK-002", "TSK-001"}) {
+		t.Errorf("priority asc = %v, want low->med->high", got)
+	}
+
+	tasks, err = List(todoPath, ListFilter{SortField: SortFieldPriority, SortReverse: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := taskIDs(tasks); !slices.Equal(got, []string{"TSK-001", "TSK-002", "TSK-003"}) {
+		t.Errorf("priority desc = %v, want high->med->low", got)
+	}
+}
+
+func TestListSortOpened(t *testing.T) {
+	todoPath, _ := writeTestTodo(t, []Task{
+		{ID: "TSK-001", Priority: "high", Opened: "2026-08-03", Status: StatusOpen, Summary: "a"},
+		{ID: "TSK-002", Priority: "med", Opened: "2026-08-01", Status: StatusOpen, Summary: "b"},
+		{ID: "TSK-003", Priority: "low", Opened: "2026-08-02", Status: StatusOpen, Summary: "c"},
+	})
+
+	tasks, err := List(todoPath, ListFilter{SortField: SortFieldOpened})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := taskIDs(tasks); !slices.Equal(got, []string{"TSK-002", "TSK-003", "TSK-001"}) {
+		t.Errorf("opened asc = %v, want oldest->newest", got)
+	}
+
+	tasks, err = List(todoPath, ListFilter{SortField: SortFieldOpened, SortReverse: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := taskIDs(tasks); !slices.Equal(got, []string{"TSK-001", "TSK-003", "TSK-002"}) {
+		t.Errorf("opened desc = %v, want newest->oldest", got)
+	}
+}
+
+func TestListSortClaimed(t *testing.T) {
+	todoPath, _ := writeTestTodo(t, []Task{
+		{ID: "TSK-001", Priority: "high", Opened: "2026-08-01", Status: StatusInProgress, Summary: "a", Claimed: "2026-08-10"},
+		{ID: "TSK-002", Priority: "med", Opened: "2026-08-02", Status: StatusOpen, Summary: "b"},
+		{ID: "TSK-003", Priority: "low", Opened: "2026-08-03", Status: StatusInProgress, Summary: "c", Claimed: "2026-08-05"},
+	})
+
+	tasks, err := List(todoPath, ListFilter{SortField: SortFieldClaimed})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := taskIDs(tasks); !slices.Equal(got, []string{"TSK-003", "TSK-001", "TSK-002"}) {
+		t.Errorf("claimed asc = %v, want oldest claimed->newest claimed->unclaimed", got)
+	}
+
+	tasks, err = List(todoPath, ListFilter{SortField: SortFieldClaimed, SortReverse: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := taskIDs(tasks); !slices.Equal(got, []string{"TSK-001", "TSK-003", "TSK-002"}) {
+		t.Errorf("claimed desc = %v, want newest claimed->oldest claimed->unclaimed", got)
+	}
+}
+
+func TestListSortAge(t *testing.T) {
+	fixed := time.Date(2026, 8, 18, 10, 30, 0, 0, time.UTC)
+	setNow(func() time.Time { return fixed })
+	defer setNow(time.Now)
+
+	todoPath, _ := writeTestTodo(t, []Task{
+		{ID: "TSK-001", Priority: "high", Opened: "2026-08-01", Status: StatusInProgress, Summary: "a", Claimed: "2026-08-10"}, // 8 days
+		{ID: "TSK-002", Priority: "med", Opened: "2026-08-02", Status: StatusOpen, Summary: "b"},                               // unclaimed
+		{ID: "TSK-003", Priority: "low", Opened: "2026-08-03", Status: StatusInProgress, Summary: "c", Claimed: "2026-08-15"},  // 3 days
+	})
+
+	tasks, err := List(todoPath, ListFilter{SortField: SortFieldAge})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := taskIDs(tasks); !slices.Equal(got, []string{"TSK-003", "TSK-001", "TSK-002"}) {
+		t.Errorf("age asc = %v, want youngest->oldest->unclaimed", got)
+	}
+
+	tasks, err = List(todoPath, ListFilter{SortField: SortFieldAge, SortReverse: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := taskIDs(tasks); !slices.Equal(got, []string{"TSK-001", "TSK-003", "TSK-002"}) {
+		t.Errorf("age desc = %v, want oldest->youngest->unclaimed", got)
+	}
+}
+
+func taskIDs(tasks []Task) []string {
+	ids := make([]string, len(tasks))
+	for i, t := range tasks {
+		ids[i] = t.ID
+	}
+	return ids
 }
 
 func TestAgeDays(t *testing.T) {

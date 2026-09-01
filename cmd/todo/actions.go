@@ -41,16 +41,23 @@ type addOptions struct {
 
 // listOptions carries the flag values for the list command.
 type listOptions struct {
-	asJSON bool
-	all    bool
-	state  string
-	stale  int
+	asJSON      bool
+	all         bool
+	state       string
+	stale       int
+	sort        string
+	sortReverse bool
 }
 
 // completeOptions carries the flag values for the complete command.
 type completeOptions struct {
 	clear bool
 	park  bool
+}
+
+// clearOptions carries the flag values for the clear command.
+type clearOptions struct {
+	all bool
 }
 
 // removeOptions carries the flag values for the remove command.
@@ -181,7 +188,11 @@ func runInit(cmd *cli.Command, cfg appConfig) error {
 }
 
 func runList(cmd *cli.Command, cfg appConfig, opts listOptions) error {
-	filter := todo.ListFilter{StaleDays: opts.stale}
+	filter := todo.ListFilter{
+		StaleDays:   opts.stale,
+		SortField:   todo.SortField(opts.sort),
+		SortReverse: opts.sortReverse,
+	}
 	if opts.state != "" {
 		s := parseState(opts.state)
 		filter.State = &s
@@ -499,6 +510,83 @@ func runComplete(cmd *cli.Command, cfg appConfig, opts completeOptions) error {
 			_, _ = fmt.Fprintf(out, "no note to park for %s\n", ref)
 		}
 	}
+	return nil
+}
+
+func runClear(cmd *cli.Command, cfg appConfig, opts clearOptions) error {
+	out := outWriter(cmd)
+	errOut := cmd.Root().ErrWriter
+	if errOut == nil {
+		errOut = os.Stderr
+	}
+
+	type target struct {
+		cfg  appConfig
+		repo string
+	}
+	var targets []target
+
+	if opts.all {
+		entries, err := registry.Load(registryPath())
+		if err != nil {
+			return exitError(err)
+		}
+		for _, e := range entries {
+			if _, err := os.Stat(e.Path); err != nil {
+				_, _ = fmt.Fprintf(errOut, "warning: skipping missing repo %s: %v\n", e.Path, err)
+				continue
+			}
+			targets = append(targets, target{
+				cfg:  appConfigFor(e.Path),
+				repo: projectFromEntry(e),
+			})
+		}
+	} else {
+		targets = append(targets, target{cfg: cfg, repo: ""})
+	}
+
+	var printed bool
+	for _, tgt := range targets {
+		res, err := todo.Clear(tgt.cfg.todoPath, tgt.cfg.notesDir)
+		if err != nil {
+			if opts.all {
+				_, _ = fmt.Fprintf(errOut, "warning: cannot clear %s: %v\n", tgt.cfg.todoPath, err)
+				continue
+			}
+			return exitError(err)
+		}
+
+		if len(res.RemovedWorkOrder) == 0 && len(res.Parked) == 0 && len(res.Float) == 0 {
+			if !opts.all {
+				_, _ = fmt.Fprintln(out, "No completed tasks to clear.")
+				printed = true
+			}
+			continue
+		}
+
+		prefix := ""
+		if opts.all {
+			prefix = tgt.repo + ": "
+		}
+
+		if len(res.RemovedWorkOrder) > 0 {
+			_, _ = fmt.Fprintf(out, "%sremoved work-order: %s\n", prefix, strings.Join(res.RemovedWorkOrder, ", "))
+			printed = true
+		}
+		if len(res.Parked) > 0 {
+			_, _ = fmt.Fprintf(out, "%sparked: %s\n", prefix, strings.Join(res.Parked, ", "))
+			printed = true
+		}
+		if len(res.Float) > 0 {
+			_, _ = fmt.Fprintf(out, "%sfloat (review): %s\n", prefix, strings.Join(res.Float, ", "))
+			printed = true
+		}
+	}
+
+	if !printed && opts.all {
+		_, _ = fmt.Fprintln(out, "No completed tasks to clear across registered repos.")
+	}
+
 	return nil
 }
 

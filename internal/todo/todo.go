@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -517,6 +518,66 @@ func Remove(opts RefOptions) (Result, error) {
 	return Result{Line: line, Note: note}, nil
 }
 
+// ClearResult describes the outcome of clearing completed tasks from a single
+// repo based on their companion-note disposition.
+type ClearResult struct {
+	RemovedWorkOrder []string // IDs removed and whose notes were deleted
+	Parked           []string // IDs removed but whose park notes were kept
+	Float            []string // completed IDs left in the file for review
+}
+
+// Clear removes completed tasks according to their note disposition:
+//   - work-order: delete the task line and its disposable note.
+//   - park: delete the task line but preserve the park record note.
+//   - float (no recognized disposition): leave the task line for manual review.
+func Clear(todoPath, notesDir string) (ClearResult, error) {
+	tasks, h, err := parseTodoFile(todoPath)
+	if err != nil {
+		return ClearResult{}, fmt.Errorf("read todo file: %w", err)
+	}
+
+	var remaining []Task
+	var result ClearResult
+	wrote := false
+
+	for _, t := range tasks {
+		if t.Status != StatusDone {
+			remaining = append(remaining, t)
+			continue
+		}
+
+		notePath := filepath.Join(notesDir, t.ID+".md")
+		disp, err := NoteDisposition(notePath)
+		if err != nil {
+			disp = DispositionFloat
+		}
+
+		switch disp {
+		case DispositionWorkOrder:
+			if err := fs.RemoveFollowingSymlink(notePath); err != nil {
+				return ClearResult{}, fmt.Errorf("delete note %s: %w", notePath, err)
+			}
+			result.RemovedWorkOrder = append(result.RemovedWorkOrder, t.ID)
+			wrote = true
+		case DispositionPark:
+			result.Parked = append(result.Parked, t.ID)
+			wrote = true
+		default:
+			remaining = append(remaining, t)
+			result.Float = append(result.Float, t.ID)
+		}
+	}
+
+	if wrote {
+		h.lastUpdated = now().Format("2006-01-02T15:04")
+		if err := writeTodoFile(todoPath, h, remaining); err != nil {
+			return ClearResult{}, fmt.Errorf("write todo file: %w", err)
+		}
+	}
+
+	return result, nil
+}
+
 // BumpResult describes the outcome of Bump. NoOp is true when the task was
 // already at the boundary (high when bumping up, low when bumping down) and
 // no write was performed.
@@ -655,14 +716,28 @@ func normalizeHeader(h *header, tasks []Task) {
 	}
 }
 
-// ListFilter filters tasks returned by List. A nil State matches all states;
-// StaleDays <= 0 disables stale filtering.
+// SortField selects the task attribute used to order List results.
+type SortField string
+
+const (
+	SortFieldPriority SortField = "priority"
+	SortFieldOpened   SortField = "opened"
+	SortFieldClaimed  SortField = "claimed"
+	SortFieldAge      SortField = "age"
+)
+
+// ListFilter filters and sorts tasks returned by List. A nil State matches all
+// states; StaleDays <= 0 disables stale filtering. An empty SortField preserves
+// file order.
 type ListFilter struct {
-	State     *Status
-	StaleDays int
+	State       *Status
+	StaleDays   int
+	SortField   SortField
+	SortReverse bool
 }
 
-// List returns the tasks in a todo file, in file order, filtered by f.
+// List returns the tasks in a todo file, filtered by f and sorted according to
+// f.SortField. File order is preserved when no sort field is requested.
 func List(todoPath string, f ListFilter) ([]Task, error) {
 	tasks, _, err := parseTodoFile(todoPath)
 	if err != nil {
@@ -680,7 +755,92 @@ func List(todoPath string, f ListFilter) ([]Task, error) {
 		}
 		out = append(out, t)
 	}
+
+	if f.SortField != "" {
+		sortTasks(out, f.SortField, f.SortReverse)
+	}
 	return out, nil
+}
+
+// sortTasks reorders tasks in-place using a stable sort. Missing claimed/age
+// values always sort to the end, regardless of direction.
+func sortTasks(tasks []Task, field SortField, reverse bool) {
+	sort.SliceStable(tasks, func(i, j int) bool {
+		return taskCompare(tasks[i], tasks[j], field, reverse) < 0
+	})
+}
+
+func taskCompare(a, b Task, field SortField, reverse bool) int {
+	switch field {
+	case SortFieldPriority:
+		return applyReverse(compareRank(priorityRank(a.Priority), priorityRank(b.Priority)), reverse)
+	case SortFieldOpened:
+		return applyReverse(strings.Compare(a.Opened, b.Opened), reverse)
+	case SortFieldClaimed:
+		return compareNullableString(a.Claimed, b.Claimed, reverse)
+	case SortFieldAge:
+		return compareNullableInt(a.AgeDays(), b.AgeDays(), -1, reverse)
+	}
+	return 0
+}
+
+func applyReverse(cmp int, reverse bool) int {
+	if reverse && cmp != 0 {
+		return -cmp
+	}
+	return cmp
+}
+
+func priorityRank(p Priority) int {
+	switch p {
+	case PriorityHigh:
+		return 3
+	case PriorityMed:
+		return 2
+	case PriorityLow:
+		return 1
+	}
+	return 0
+}
+
+func compareRank(a, b int) int {
+	if a < b {
+		return -1
+	}
+	if a > b {
+		return 1
+	}
+	return 0
+}
+
+func compareNullableString(a, b string, reverse bool) int {
+	aMissing := a == ""
+	bMissing := b == ""
+	if aMissing && bMissing {
+		return 0
+	}
+	if aMissing {
+		return 1
+	}
+	if bMissing {
+		return -1
+	}
+	return applyReverse(strings.Compare(a, b), reverse)
+}
+
+func compareNullableInt(a, b, missing int, reverse bool) int {
+	aMissing := a == missing
+	bMissing := b == missing
+	if aMissing && bMissing {
+		return 0
+	}
+	if aMissing {
+		return 1
+	}
+	if bMissing {
+		return -1
+	}
+	return applyReverse(compareRank(a, b), reverse)
 }
 
 // AgeDays returns the number of full days since the task was claimed, or -1

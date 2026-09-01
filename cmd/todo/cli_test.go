@@ -133,6 +133,58 @@ func TestListJSON(t *testing.T) {
 	}
 }
 
+func TestListSort(t *testing.T) {
+	setupGitRepo(t)
+
+	if _, _, err := runApp(t, []string{"init"}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if _, _, err := runApp(t, []string{"add", "-p", "med", "medium task"}); err != nil {
+		t.Fatalf("add med: %v", err)
+	}
+	if _, _, err := runApp(t, []string{"add", "-p", "low", "low task"}); err != nil {
+		t.Fatalf("add low: %v", err)
+	}
+	if _, _, err := runApp(t, []string{"add", "-p", "high", "high task"}); err != nil {
+		t.Fatalf("add high: %v", err)
+	}
+
+	out, _, err := runApp(t, []string{"list", "--sort", "priority", "--json"})
+	if err != nil {
+		t.Fatalf("list --sort priority: %v", err)
+	}
+	var envelope struct {
+		SchemaVersion int        `json:"schema_version"`
+		Tasks         []jsonTask `json:"tasks"`
+	}
+	if err := json.Unmarshal([]byte(out), &envelope); err != nil {
+		t.Fatalf("parse json: %v", err)
+	}
+	if len(envelope.Tasks) != 3 {
+		t.Fatalf("tasks = %d, want 3", len(envelope.Tasks))
+	}
+	if got := envelope.Tasks[0].Priority; got != "low" {
+		t.Errorf("first sorted priority = %q, want low", got)
+	}
+	if got := envelope.Tasks[2].Priority; got != "high" {
+		t.Errorf("last sorted priority = %q, want high", got)
+	}
+
+	out, _, err = runApp(t, []string{"list", "--sort", "priority", "--reverse", "--json"})
+	if err != nil {
+		t.Fatalf("list --sort priority --reverse: %v", err)
+	}
+	if err := json.Unmarshal([]byte(out), &envelope); err != nil {
+		t.Fatalf("parse json: %v", err)
+	}
+	if got := envelope.Tasks[0].Priority; got != "high" {
+		t.Errorf("first reverse sorted priority = %q, want high", got)
+	}
+	if got := envelope.Tasks[2].Priority; got != "low" {
+		t.Errorf("last reverse sorted priority = %q, want low", got)
+	}
+}
+
 func TestDetailJSON(t *testing.T) {
 	setupGitRepo(t)
 
@@ -519,6 +571,122 @@ func TestListAll(t *testing.T) {
 	}
 	if !sums["repo a task"] || !sums["repo b task"] {
 		t.Errorf("summaries = %v", sums)
+	}
+}
+
+func TestClearLocal(t *testing.T) {
+	setupGitRepo(t)
+
+	if _, _, err := runApp(t, []string{"init"}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if _, _, err := runApp(t, []string{"add", "--kind", "work-order", "-n", "wo task"}); err != nil {
+		t.Fatalf("add work-order: %v", err)
+	}
+	if _, _, err := runApp(t, []string{"add", "-n", "--category", "areas", "--synopsis", "park task", "park task"}); err != nil {
+		t.Fatalf("add park: %v", err)
+	}
+	if _, _, err := runApp(t, []string{"add", "float task"}); err != nil {
+		t.Fatalf("add float: %v", err)
+	}
+
+	if _, _, err := runApp(t, []string{"pickup", "TSK-001"}); err != nil {
+		t.Fatalf("pickup TSK-001: %v", err)
+	}
+	if _, _, err := runApp(t, []string{"pickup", "TSK-002"}); err != nil {
+		t.Fatalf("pickup TSK-002: %v", err)
+	}
+	if _, _, err := runApp(t, []string{"pickup", "TSK-003"}); err != nil {
+		t.Fatalf("pickup TSK-003: %v", err)
+	}
+
+	if _, _, err := runApp(t, []string{"complete", "TSK-001"}); err != nil {
+		t.Fatalf("complete TSK-001: %v", err)
+	}
+	if _, _, err := runApp(t, []string{"complete", "TSK-002"}); err != nil {
+		t.Fatalf("complete TSK-002: %v", err)
+	}
+	if _, _, err := runApp(t, []string{"complete", "TSK-003"}); err != nil {
+		t.Fatalf("complete TSK-003: %v", err)
+	}
+
+	out, _, err := runApp(t, []string{"clear"})
+	if err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	if !strings.Contains(out, "TSK-001") {
+		t.Errorf("clear output missing TSK-001: %q", out)
+	}
+	if !strings.Contains(out, "TSK-002") {
+		t.Errorf("clear output missing TSK-002: %q", out)
+	}
+	if !strings.Contains(out, "TSK-003") {
+		t.Errorf("clear output missing TSK-003: %q", out)
+	}
+
+	if _, err := os.Stat(".todo/notes/TSK-001.md"); !os.IsNotExist(err) {
+		t.Errorf("work-order note not deleted: %v", err)
+	}
+	if _, err := os.Stat(".todo/notes/TSK-002.md"); err != nil {
+		t.Errorf("park note deleted: %v", err)
+	}
+
+	out, _, err = runApp(t, []string{"list"})
+	if err != nil {
+		t.Fatalf("list after clear: %v", err)
+	}
+	if strings.Contains(out, "TSK-001") || strings.Contains(out, "TSK-002") {
+		t.Errorf("cleared tasks still listed: %q", out)
+	}
+	if !strings.Contains(out, "TSK-003") {
+		t.Errorf("float task missing after clear: %q", out)
+	}
+}
+
+func TestClearAll(t *testing.T) {
+	repoA := setupGitRepo(t)
+
+	if _, _, err := runApp(t, []string{"init"}); err != nil {
+		t.Fatalf("init repo a: %v", err)
+	}
+	if _, _, err := runApp(t, []string{"add", "--kind", "work-order", "-n", "repo a done"}); err != nil {
+		t.Fatalf("add repo a: %v", err)
+	}
+	if _, _, err := runApp(t, []string{"pickup", "TSK-001"}); err != nil {
+		t.Fatalf("pickup repo a: %v", err)
+	}
+	if _, _, err := runApp(t, []string{"complete", "TSK-001"}); err != nil {
+		t.Fatalf("complete repo a: %v", err)
+	}
+
+	repoB := t.TempDir()
+	if err := exec.Command("git", "init", repoB).Run(); err != nil {
+		t.Fatalf("git init repo b: %v", err)
+	}
+	t.Chdir(repoB)
+	if _, _, err := runApp(t, []string{"init"}); err != nil {
+		t.Fatalf("init repo b: %v", err)
+	}
+	if _, _, err := runApp(t, []string{"add", "repo b float"}); err != nil {
+		t.Fatalf("add repo b: %v", err)
+	}
+	if _, _, err := runApp(t, []string{"pickup", "TSK-001"}); err != nil {
+		t.Fatalf("pickup repo b: %v", err)
+	}
+	if _, _, err := runApp(t, []string{"complete", "TSK-001"}); err != nil {
+		t.Fatalf("complete repo b: %v", err)
+	}
+
+	t.Chdir(repoA)
+	out, _, err := runApp(t, []string{"clear", "--all"})
+	if err != nil {
+		t.Fatalf("clear --all: %v", err)
+	}
+	if !strings.Contains(out, "removed work-order") || !strings.Contains(out, "TSK-001") {
+		t.Errorf("clear --all missing repo a work-order: %q", out)
+	}
+	if !strings.Contains(out, "float (review)") || !strings.Contains(out, "TSK-001") {
+		t.Errorf("clear --all missing repo b float: %q", out)
 	}
 }
 
