@@ -204,6 +204,32 @@ type AddOptions struct {
 	Source   string
 }
 
+// MaxSummaryLen caps the on-disk task summary in runes. A longer summary is
+// truncated on the line and spilled into the companion note.
+const MaxSummaryLen = 120
+
+// truncateSummary shortens s to at most max runes, appending an ASCII ellipsis
+// when it overflows. The bool reports whether truncation occurred.
+func truncateSummary(s string, max int) (string, bool) {
+	runes := []rune(s)
+	if len(runes) <= max {
+		return s, false
+	}
+	if max <= 3 {
+		return string(runes[:max]), true
+	}
+	return string(runes[:max-3]) + "...", true
+}
+
+// spillBody prepends the full summary to a work-order note body, separating
+// the two with a blank line when the body is non-empty.
+func spillBody(summary, body string) string {
+	if body == "" {
+		return summary
+	}
+	return summary + "\n\n" + body
+}
+
 func Add(opts AddOptions) (AddResult, error) {
 	priority, err := parsePriority(opts.Priority)
 	if err != nil {
@@ -217,12 +243,24 @@ func Add(opts AddOptions) (AddResult, error) {
 
 	nextID := nextTaskID(tasks, header)
 
+	fullSummary := opts.Summary
+	lineSummary, spilled := truncateSummary(fullSummary, MaxSummaryLen)
+
+	// An over-long summary spills into a disposable work-order note so the
+	// full text survives truncation on the line.
+	if spilled && !opts.CreateNote {
+		opts.CreateNote = true
+		opts.Kind = "work-order"
+		opts.NoteContent = ""
+		opts.NoteFile = ""
+	}
+
 	task := Task{
 		ID:       nextID,
 		Priority: priority,
 		Opened:   now().Format("2006-01-02"),
 		Status:   StatusOpen,
-		Summary:  opts.Summary,
+		Summary:  lineSummary,
 	}
 
 	result := AddResult{
@@ -245,7 +283,12 @@ func Add(opts AddOptions) (AddResult, error) {
 			}
 			content = string(data)
 		}
-		content, err = buildNoteContent(content, opts.Kind, opts.Category, opts.Synopsis, opts.Source, opts.Summary, task.Opened)
+
+		if spilled && opts.Kind == "work-order" {
+			content = spillBody(fullSummary, content)
+		}
+
+		content, err = buildNoteContent(content, opts.Kind, opts.Category, opts.Synopsis, opts.Source, fullSummary, task.Opened)
 		if err != nil {
 			return AddResult{}, err
 		}

@@ -1343,6 +1343,188 @@ func TestAddNoteRecordFrontmatter(t *testing.T) {
 	}
 }
 
+func TestTruncateSummary(t *testing.T) {
+	cases := []struct {
+		in      string
+		max     int
+		want    string
+		spilled bool
+	}{
+		{"short", 10, "short", false},
+		{"exactly10", 10, "exactly10", false},
+		{"elevenchars", 10, "elevenc...", true},
+		{"abc", 3, "abc", false},
+		{"abcd", 3, "abc", true},   // max <= 3: hard cut, no room for ellipsis
+		{"héllo", 4, "h...", true}, // multibyte-safe
+	}
+	for _, tc := range cases {
+		got, spilled := truncateSummary(tc.in, tc.max)
+		if got != tc.want || spilled != tc.spilled {
+			t.Errorf("truncateSummary(%q, %d) = (%q, %v), want (%q, %v)", tc.in, tc.max, got, spilled, tc.want, tc.spilled)
+		}
+		if len([]rune(got)) > tc.max {
+			t.Errorf("truncateSummary(%q, %d) produced %q (%d runes) > max", tc.in, tc.max, got, len([]rune(got)))
+		}
+	}
+}
+
+func TestAddTruncatesLongSummary(t *testing.T) {
+	fixed := time.Date(2026, 8, 18, 10, 30, 0, 0, time.UTC)
+	setNow(func() time.Time { return fixed })
+	defer setNow(time.Now)
+
+	todoPath, notesDir := writeTestTodo(t, nil)
+	fullSummary := strings.Repeat("a", 150)
+
+	result, err := Add(AddOptions{
+		TodoPath: todoPath,
+		NotesDir: notesDir,
+		Priority: "med",
+		Summary:  fullSummary,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The line summary is capped at MaxSummaryLen runes and flagged with "...".
+	tasks := readTasks(t, todoPath)
+	if len(tasks) != 1 {
+		t.Fatalf("tasks = %d, want 1", len(tasks))
+	}
+	got := tasks[0].Summary
+	if len([]rune(got)) != MaxSummaryLen {
+		t.Errorf("summary runes = %d, want %d", len([]rune(got)), MaxSummaryLen)
+	}
+	if !strings.HasSuffix(got, "...") {
+		t.Errorf("summary = %q, want trailing ellipsis", got)
+	}
+	if strings.Contains(got, strings.Repeat("a", 150)) {
+		t.Error("summary was not truncated")
+	}
+
+	// The full summary spills into an auto-created work-order note.
+	want := filepath.Join(notesDir, "TSK-001.md")
+	if result.NotePath != want {
+		t.Errorf("note path = %q, want %q", result.NotePath, want)
+	}
+	data, err := os.ReadFile(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantContent := "---\nkind: work-order\n---\n\n" + fullSummary
+	if string(data) != wantContent {
+		t.Errorf("note content = %q, want %q", string(data), wantContent)
+	}
+	if disp, err := NoteDisposition(want); err != nil || disp != DispositionWorkOrder {
+		t.Errorf("disposition = %q (err %v), want work-order", disp, err)
+	}
+}
+
+func TestAddLongSummarySpillsIntoWorkOrderNote(t *testing.T) {
+	fixed := time.Date(2026, 8, 18, 10, 30, 0, 0, time.UTC)
+	setNow(func() time.Time { return fixed })
+	defer setNow(time.Now)
+
+	todoPath, notesDir := writeTestTodo(t, nil)
+	fullSummary := strings.Repeat("b", 150)
+
+	_, err := Add(AddOptions{
+		TodoPath:    todoPath,
+		NotesDir:    notesDir,
+		Priority:    "med",
+		Summary:     fullSummary,
+		CreateNote:  true,
+		NoteContent: "body text",
+		Kind:        "work-order",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(notesDir, "TSK-001.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "---\nkind: work-order\n---\n\n" + fullSummary + "\n\nbody text"
+	if string(data) != want {
+		t.Errorf("note content = %q, want %q", string(data), want)
+	}
+}
+
+func TestAddLongSummaryParkRecordKeepsSynopsis(t *testing.T) {
+	fixed := time.Date(2026, 8, 18, 10, 30, 0, 0, time.UTC)
+	setNow(func() time.Time { return fixed })
+	defer setNow(time.Now)
+
+	todoPath, notesDir := writeTestTodo(t, nil)
+	fullSummary := strings.Repeat("c", 150)
+
+	_, err := Add(AddOptions{
+		TodoPath:   todoPath,
+		NotesDir:   notesDir,
+		Priority:   "med",
+		Summary:    fullSummary,
+		CreateNote: true,
+		Category:   "areas",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tasks := readTasks(t, todoPath)
+	if strings.Contains(tasks[0].Summary, fullSummary) {
+		t.Error("line summary was not truncated for a park record")
+	}
+
+	data, err := os.ReadFile(filepath.Join(notesDir, "TSK-001.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "synopsis: "+fullSummary) {
+		t.Errorf("note synopsis missing full summary: %q", string(data))
+	}
+	if disp, err := NoteDisposition(filepath.Join(notesDir, "TSK-001.md")); err != nil || disp != DispositionPark {
+		t.Errorf("disposition = %q (err %v), want park", disp, err)
+	}
+}
+
+func TestAddLongSummaryDryRun(t *testing.T) {
+	fixed := time.Date(2026, 8, 18, 10, 30, 0, 0, time.UTC)
+	setNow(func() time.Time { return fixed })
+	defer setNow(time.Now)
+
+	todoPath, notesDir := writeTestTodo(t, nil)
+	fullSummary := strings.Repeat("d", 150)
+
+	result, err := Add(AddOptions{
+		TodoPath: todoPath,
+		NotesDir: notesDir,
+		Priority: "med",
+		Summary:  fullSummary,
+		DryRun:   true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(notesDir, "TSK-001.md"); result.NotePath != want {
+		t.Errorf("dry run note path = %q, want %q", result.NotePath, want)
+	}
+	if result.NoteContent != "---\nkind: work-order\n---\n\n"+fullSummary {
+		t.Errorf("dry run note content = %q", result.NoteContent)
+	}
+	if strings.Contains(result.Line, fullSummary) {
+		t.Error("dry run line not truncated")
+	}
+
+	// Nothing persisted.
+	if _, err := os.Stat(filepath.Join(notesDir, "TSK-001.md")); !os.IsNotExist(err) {
+		t.Errorf("dry run wrote a note file: %v", err)
+	}
+	if len(readTasks(t, todoPath)) != 0 {
+		t.Error("dry run wrote a task")
+	}
+}
+
 func TestAddNoteInvalidCategory(t *testing.T) {
 	todoPath, notesDir := writeTestTodo(t, nil)
 

@@ -32,6 +32,7 @@ todo add -n --note-file ./draft.md "task"   # ...or copy an existing file (not m
 todo add --dry-run -s "x" -n "task"         # preview the would-be line + note, no write
 todo add -n --kind work-order "task"        # note is a disposable work order
 todo add -n --category areas --synopsis "one line" --source repo "task"  # note is a park record
+todo add "an over-long summary (over 120 chars) ..."                    # long summaries truncate on the line and spill into a work-order note
 todo list                                   # list tasks (alias: todo ls)
 todo list --state open                      # filter by status: open|progress|done
 todo list --stale 5                         # only claimed tasks older than 5 day/s
@@ -92,6 +93,8 @@ Every companion note carries a write-time disposition in its frontmatter so clea
 
 - **record** (default): park-native frontmatter with `category`, `created`, `source`, and `synopsis`. Stamped by `--category`/`--synopsis`/`--source`; without any disposition flags it defaults to `category: areas` so notes are never silently dropped.
 - **work order**: `kind: work-order`, stamped by `--kind work-order`.
+
+Summaries longer than 120 characters are truncated on the task line (with a trailing `...`) and spilled into a `kind: work-order` note so the full text is preserved. When no note is requested, that note is created automatically.
 
 `todo detail --json` exposes the derived `disposition` field: `park` (has `category`), `work-order` (has `kind: work-order`), or `float` (neither, including notes with no frontmatter).
 
