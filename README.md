@@ -22,7 +22,7 @@ go build -o todo .
 `todo` operates on the current git repo. Run `todo init` once to create the `.todo/todo.md` file, then manage tasks:
 
 ```sh
-todo init                                   # create .todo/todo.md if missing
+todo init                                   # create .todo/todo.md if missing and register the repo
 todo add "fix the thing"                    # add a task (default priority: med)
 todo add -p high "urgent issue"             # add with priority (low|med|high)
 todo add -s "summaries also via flag"       # summary via flag
@@ -37,6 +37,12 @@ todo list                                   # list tasks (alias: todo ls)
 todo list --state open                      # filter by status: open|progress|done
 todo list --stale 5                         # only claimed tasks older than 5 day/s
 todo list --json                            # machine-readable JSON output
+todo list --all                             # list tasks across all registered repos
+todo list --all --json                      # ...with repo_path/repo_project and disposition
+todo doctor                                 # report stale/unregistered registry entries
+todo doctor --all                           # also scan parent dirs of registered repos
+todo doctor --fix                           # drop stale entries and register missing repos
+todo doctor --depth 3 /code                 # scan /code up to depth 3 for unregistered .todo folders
 todo detail TSK-001                         # show task details + 20-line note preview
 todo detail --lines 5 TSK-001               # preview first 5 lines of the note
 todo detail --no-note TSK-001               # show task details without note preview
@@ -87,6 +93,10 @@ Status is `[ ]` open, `[o]` in progress, `[x]` done. `claimed:` records when a t
 
 `next_id:` is a monotonic high-water mark: `add` never reuses it, so removing all tasks still lets new tasks resume at the next ID rather than restarting at TSK-001. It is backfilled automatically on any write, so files created before this field existed converge without manual action.
 
+## Registry
+
+Every `todo init` registers the repo in a machine-local JSON cache at `~/.config/.todocache`. The registry stores the absolute repo path, project name, git remote URL, parsed host/owner, and a `last_seen` timestamp. `todo list --all` and `todo doctor` use this cache to operate across tracked folders without `cd`ing.
+
 ## Note disposition
 
 Every companion note carries a write-time disposition in its frontmatter so clear-time tooling knows whether to preserve, delete, or float it:
@@ -105,7 +115,7 @@ Both `todo list --json` and `todo detail --json` emit stable, machine-readable J
 - `status`: canonical status designation (`open`, `in progress`, `complete`)
 - `status_symbol`: raw checkbox character (` `, `o`, `x`)
 
-`todo list --json` returns an array of tasks with fields: `id`, `status`, `status_symbol`, `priority`, `opened`, `claimed`, `age_days`, `summary`.
+`todo list --json` returns an array of tasks with fields: `id`, `status`, `status_symbol`, `priority`, `opened`, `claimed`, `age_days`, `summary`, and `disposition` (`park`, `work-order`, or `float`). When using `todo list --all --json`, each task also includes `repo_path` and `repo_project`.
 
 `todo detail --json` returns a single object with fields: `id`, `status`, `status_symbol`, `priority`, `opened`, `opened_days`, `claimed`, `age_days`, `summary`, `disposition`, `note_path`, `note_exists`, `note_preview`, `note_preview_truncated`.
 

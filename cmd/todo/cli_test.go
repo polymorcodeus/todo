@@ -11,6 +11,8 @@ import (
 	"testing"
 
 	"github.com/urfave/cli/v3"
+
+	"gitlab.com/fuzzyporpoise/todo/internal/registry"
 )
 
 func setupGitRepo(t *testing.T) string {
@@ -21,6 +23,7 @@ func setupGitRepo(t *testing.T) string {
 		t.Fatalf("git init: %v", err)
 	}
 	t.Chdir(dir)
+	t.Setenv("TODO_REGISTRY", filepath.Join(dir, ".todocache"))
 	return dir
 }
 
@@ -442,5 +445,141 @@ func TestAddDispositionRequiresNote(t *testing.T) {
 	_, _, err := runApp(t, []string{"add", "--category", "areas", "no note"})
 	if err == nil {
 		t.Fatal("disposition flag without --note: expected error")
+	}
+}
+
+func TestInitRegistersRepo(t *testing.T) {
+	dir := setupGitRepo(t)
+	dir, _ = filepath.EvalSymlinks(dir)
+
+	if _, _, err := runApp(t, []string{"init"}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+
+	entries, err := registry.Load(os.Getenv("TODO_REGISTRY"))
+	if err != nil {
+		t.Fatalf("load registry: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("registry entries = %d, want 1", len(entries))
+	}
+	if entries[0].Path != dir {
+		t.Errorf("path = %q, want %q", entries[0].Path, dir)
+	}
+}
+
+func TestListAll(t *testing.T) {
+	repoA := setupGitRepo(t)
+
+	if _, _, err := runApp(t, []string{"init"}); err != nil {
+		t.Fatalf("init repo a: %v", err)
+	}
+	if _, _, err := runApp(t, []string{"add", "repo a task"}); err != nil {
+		t.Fatalf("add repo a: %v", err)
+	}
+
+	repoB := t.TempDir()
+	if err := exec.Command("git", "init", repoB).Run(); err != nil {
+		t.Fatalf("git init repo b: %v", err)
+	}
+	t.Chdir(repoB)
+	if _, _, err := runApp(t, []string{"init"}); err != nil {
+		t.Fatalf("init repo b: %v", err)
+	}
+	if _, _, err := runApp(t, []string{"add", "repo b task"}); err != nil {
+		t.Fatalf("add repo b: %v", err)
+	}
+
+	t.Chdir(repoA)
+	out, _, err := runApp(t, []string{"list", "--all", "--json"})
+	if err != nil {
+		t.Fatalf("list --all: %v", err)
+	}
+
+	var envelope struct {
+		SchemaVersion int        `json:"schema_version"`
+		Tasks         []jsonTask `json:"tasks"`
+	}
+	if err := json.Unmarshal([]byte(out), &envelope); err != nil {
+		t.Fatalf("parse json: %v", err)
+	}
+	if len(envelope.Tasks) != 2 {
+		t.Fatalf("tasks = %d, want 2", len(envelope.Tasks))
+	}
+
+	sums := make(map[string]bool)
+	for _, task := range envelope.Tasks {
+		sums[task.Summary] = true
+		if task.RepoPath == "" {
+			t.Errorf("task %s missing repo_path", task.ID)
+		}
+		if task.Disposition == "" {
+			t.Errorf("task %s missing disposition", task.ID)
+		}
+	}
+	if !sums["repo a task"] || !sums["repo b task"] {
+		t.Errorf("summaries = %v", sums)
+	}
+}
+
+func TestDoctorReportsAndFixes(t *testing.T) {
+	repoA := setupGitRepo(t)
+	repoA, _ = filepath.EvalSymlinks(repoA)
+	registryPath := os.Getenv("TODO_REGISTRY")
+
+	if _, _, err := runApp(t, []string{"init"}); err != nil {
+		t.Fatalf("init repo a: %v", err)
+	}
+
+	repoB := t.TempDir()
+	if err := exec.Command("git", "init", repoB).Run(); err != nil {
+		t.Fatalf("git init repo b: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(repoB, ".todo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoB, ".todo", "todo.md"), []byte("---\n---\n\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	repoB, _ = filepath.EvalSymlinks(repoB)
+
+	missing := filepath.Join(t.TempDir(), "does-not-exist")
+	entries := []registry.Entry{
+		{Path: repoA},
+		{Path: missing},
+	}
+	if err := registry.Save(registryPath, entries); err != nil {
+		t.Fatalf("seed registry: %v", err)
+	}
+
+	out, _, err := runApp(t, []string{"doctor", "--all", "--depth", "1"})
+	if err != nil {
+		t.Fatalf("doctor: %v", err)
+	}
+	if !strings.Contains(out, "stale\t"+missing) {
+		t.Errorf("doctor output missing stale entry: %q", out)
+	}
+	if !strings.Contains(out, "unregistered\t"+repoB) {
+		t.Errorf("doctor output missing unregistered entry: %q", out)
+	}
+
+	_, _, err = runApp(t, []string{"doctor", "--all", "--fix", "--depth", "1"})
+	if err != nil {
+		t.Fatalf("doctor --fix: %v", err)
+	}
+
+	fixed, err := registry.Load(registryPath)
+	if err != nil {
+		t.Fatalf("load fixed registry: %v", err)
+	}
+	if len(fixed) != 2 {
+		t.Fatalf("fixed entries = %d, want 2", len(fixed))
+	}
+	paths := make(map[string]bool)
+	for _, e := range fixed {
+		paths[e.Path] = true
+	}
+	if !paths[repoA] || !paths[repoB] || paths[missing] {
+		t.Errorf("fixed paths = %v", paths)
 	}
 }

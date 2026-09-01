@@ -30,3 +30,13 @@ func RemoteURL(remote string) string {
 	}
 	return strings.TrimSuffix(strings.TrimSpace(string(out)), ".git")
 }
+
+// RemoteURLAt returns the URL of the named remote in dir, or "" when the
+// remote is unavailable.
+func RemoteURLAt(dir, remote string) string {
+	out, err := exec.Command("git", "-C", dir, "remote", "get-url", remote).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSuffix(strings.TrimSpace(string(out)), ".git")
+}

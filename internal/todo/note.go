@@ -1,4 +1,5 @@
-// Note disposition: write-time frontmatter classification for clear-time.
+// Package todo handles note disposition: write-time frontmatter classification
+// for clear-time.
 package todo
 
 import (

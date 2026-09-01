@@ -6,17 +6,21 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"text/tabwriter"
 
 	"github.com/urfave/cli/v3"
 
 	"gitlab.com/fuzzyporpoise/todo/internal/fs"
+	"gitlab.com/fuzzyporpoise/todo/internal/git"
+	"gitlab.com/fuzzyporpoise/todo/internal/registry"
 	"gitlab.com/fuzzyporpoise/todo/internal/todo"
 )
 
 // appConfig carries the resolved per-run dependencies for all commands.
 type appConfig struct {
+	repoRoot string
 	todoPath string
 	notesDir string
 }
@@ -38,6 +42,7 @@ type addOptions struct {
 // listOptions carries the flag values for the list command.
 type listOptions struct {
 	asJSON bool
+	all    bool
 	state  string
 	stale  int
 }
@@ -134,17 +139,44 @@ func runAdd(cmd *cli.Command, cfg appConfig, opts addOptions) error {
 	return nil
 }
 
-func runInit(cfg appConfig) error {
+func runInit(cmd *cli.Command, cfg appConfig) error {
 	exists, err := fs.VerifyExists(cfg.todoPath)
 	if err != nil {
 		return exitError(err)
 	}
-	if exists {
-		return nil
+	if !exists {
+		if err := todo.Init(cfg.todoPath); err != nil {
+			return exitError(err)
+		}
 	}
-	if err := todo.Init(cfg.todoPath); err != nil {
+
+	entries, err := registry.Load(registryPath())
+	if err != nil {
 		return exitError(err)
 	}
+
+	remote := git.RemoteURL("origin")
+	host, owner := git.ParseRemote(remote)
+	project := filepath.Base(cfg.repoRoot)
+
+	entries = registry.Upsert(entries, cfg.repoRoot, remote, project)
+	for i := range entries {
+		if filepath.Clean(entries[i].Path) == filepath.Clean(cfg.repoRoot) {
+			entries[i].Host = host
+			entries[i].Owner = owner
+			break
+		}
+	}
+
+	if err := registry.Save(registryPath(), entries); err != nil {
+		return exitError(err)
+	}
+
+	out := outWriter(cmd)
+	if !exists {
+		_, _ = fmt.Fprintf(out, "created %s\n", cfg.todoPath)
+	}
+	_, _ = fmt.Fprintf(out, "registered %s\n", cfg.repoRoot)
 	return nil
 }
 
@@ -155,37 +187,106 @@ func runList(cmd *cli.Command, cfg appConfig, opts listOptions) error {
 		filter.State = &s
 	}
 
-	tasks, err := todo.List(cfg.todoPath, filter)
-	if err != nil {
-		return exitError(err)
-	}
-
 	out := outWriter(cmd)
-	if opts.asJSON {
-		return writeJSON(out, tasks)
+	errOut := cmd.Root().ErrWriter
+	if errOut == nil {
+		errOut = os.Stderr
 	}
 
-	if len(tasks) == 0 {
+	var listed []listedTask
+	if opts.all {
+		entries, err := registry.Load(registryPath())
+		if err != nil {
+			return exitError(err)
+		}
+		for _, e := range entries {
+			if _, err := os.Stat(e.Path); err != nil {
+				_, _ = fmt.Fprintf(errOut, "warning: skipping missing repo %s: %v\n", e.Path, err)
+				continue
+			}
+			todoPath := filepath.Join(e.Path, ".todo", "todo.md")
+			tasks, err := todo.List(todoPath, filter)
+			if err != nil {
+				_, _ = fmt.Fprintf(errOut, "warning: cannot read %s: %v\n", todoPath, err)
+				continue
+			}
+			for _, t := range tasks {
+				listed = append(listed, listedTask{
+					Task:        t,
+					repoPath:    e.Path,
+					repoProject: projectFromEntry(e),
+				})
+			}
+		}
+	} else {
+		tasks, err := todo.List(cfg.todoPath, filter)
+		if err != nil {
+			return exitError(err)
+		}
+		listed = make([]listedTask, len(tasks))
+		for i, t := range tasks {
+			listed[i] = listedTask{
+				Task:     t,
+				notesDir: cfg.notesDir,
+			}
+		}
+	}
+
+	if opts.asJSON {
+		return writeJSON(out, listed)
+	}
+
+	if len(listed) == 0 {
 		_, _ = fmt.Fprintln(out, "No tasks found.")
 		return nil
 	}
 
+	showRepo := opts.all
 	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-	// tabwriter write errors surface on Flush below.
-	_, _ = fmt.Fprintln(w, "\tID\tPRIORITY\tOPENED\tCLAIMED\tAGE\tSUMMARY")
-	_, _ = fmt.Fprintln(w, "\t--\t--------\t------\t-------\t---\t-------")
-	for _, t := range tasks {
+	if showRepo {
+		_, _ = fmt.Fprintln(w, "\tID\tPRIORITY\tOPENED\tCLAIMED\tAGE\tREPO\tSUMMARY")
+		_, _ = fmt.Fprintln(w, "\t--\t--------\t------\t-------\t---\t----\t-------")
+	} else {
+		_, _ = fmt.Fprintln(w, "\tID\tPRIORITY\tOPENED\tCLAIMED\tAGE\tSUMMARY")
+		_, _ = fmt.Fprintln(w, "\t--\t--------\t------\t-------\t---\t-------")
+	}
+	for _, lt := range listed {
+		t := lt.Task
 		age := "-"
 		if t.AgeDays() >= 0 {
 			age = fmt.Sprintf("%d day/s", t.AgeDays())
 		}
-		_, _ = fmt.Fprintf(w, "[%s]\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			t.Status, t.ID, t.Priority, t.Opened, dashIfEmpty(t.Claimed), age, t.Summary)
+		repo := lt.repoProject
+		if repo == "" && showRepo {
+			repo = filepath.Base(lt.repoPath)
+		}
+		if showRepo {
+			_, _ = fmt.Fprintf(w, "[%s]\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				t.Status, t.ID, t.Priority, t.Opened, dashIfEmpty(t.Claimed), age, repo, t.Summary)
+		} else {
+			_, _ = fmt.Fprintf(w, "[%s]\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				t.Status, t.ID, t.Priority, t.Opened, dashIfEmpty(t.Claimed), age, t.Summary)
+		}
 	}
 	if err := w.Flush(); err != nil {
 		return exitError(err)
 	}
 	return nil
+}
+
+// listedTask augments a task with optional cross-repo metadata for list output.
+type listedTask struct {
+	todo.Task
+	repoPath    string
+	repoProject string
+	notesDir    string // set for local tasks so disposition can be resolved
+}
+
+func projectFromEntry(e registry.Entry) string {
+	if e.Project != "" {
+		return e.Project
+	}
+	return filepath.Base(e.Path)
 }
 
 func runPickup(cmd *cli.Command, cfg appConfig) error {
@@ -401,6 +502,73 @@ func runComplete(cmd *cli.Command, cfg appConfig, opts completeOptions) error {
 	return nil
 }
 
+// doctorOptions carries the flag values for the doctor command.
+type doctorOptions struct {
+	all   bool
+	fix   bool
+	depth int
+	roots []string
+}
+
+func runDoctor(cmd *cli.Command, opts doctorOptions) error {
+	entries, err := registry.Load(registryPath())
+	if err != nil {
+		return exitError(err)
+	}
+
+	kept, stale := registry.DropMissing(entries)
+
+	roots := opts.roots
+	if len(roots) == 0 {
+		if opts.all {
+			roots = registry.ParentDirs(kept)
+		} else {
+			cwd, err := os.Getwd()
+			if err != nil {
+				return exitError(err)
+			}
+			roots = []string{cwd}
+		}
+	}
+
+	unregistered, err := registry.FindUnregistered(roots, opts.depth, kept)
+	if err != nil {
+		return exitError(err)
+	}
+
+	out := outWriter(cmd)
+	for _, e := range stale {
+		_, _ = fmt.Fprintf(out, "stale\t%s\n", e.Path)
+	}
+	for _, p := range unregistered {
+		_, _ = fmt.Fprintf(out, "unregistered\t%s\n", p)
+	}
+
+	if opts.fix {
+		for _, p := range unregistered {
+			remote := git.RemoteURLAt(p, "origin")
+			host, owner := git.ParseRemote(remote)
+			project := filepath.Base(p)
+			kept = registry.Upsert(kept, p, remote, project)
+			for i := range kept {
+				if filepath.Clean(kept[i].Path) == filepath.Clean(p) {
+					kept[i].Host = host
+					kept[i].Owner = owner
+					break
+				}
+			}
+		}
+		if err := registry.Save(registryPath(), kept); err != nil {
+			return exitError(err)
+		}
+		_, _ = fmt.Fprintf(out, "reconciled: %d kept, %d dropped, %d added\n", len(kept), len(stale), len(unregistered))
+	} else {
+		_, _ = fmt.Fprintf(out, "summary: %d ok, %d stale, %d unregistered\n", len(kept), len(stale), len(unregistered))
+	}
+
+	return nil
+}
+
 // requireTaskRef validates and returns the first positional argument as a task
 // reference.
 func requireTaskRef(cmd *cli.Command) (string, error) {
@@ -465,6 +633,9 @@ type jsonTask struct {
 	Claimed      string `json:"claimed,omitempty"`
 	AgeDays      *int   `json:"age_days,omitempty"`
 	Summary      string `json:"summary"`
+	Disposition  string `json:"disposition,omitempty"`
+	RepoPath     string `json:"repo_path,omitempty"`
+	RepoProject  string `json:"repo_project,omitempty"`
 }
 
 // jsonListEnvelope wraps the list --json output in a versioned contract so
@@ -476,9 +647,12 @@ type jsonListEnvelope struct {
 
 // writeJSON emits tasks in a versioned envelope with a stable schema for
 // machine consumers.
-func writeJSON(out io.Writer, tasks []todo.Task) error {
+// writeJSON emits tasks in a versioned envelope with a stable schema for
+// machine consumers.
+func writeJSON(out io.Writer, tasks []listedTask) error {
 	outTasks := make([]jsonTask, 0, len(tasks))
-	for _, t := range tasks {
+	for _, lt := range tasks {
+		t := lt.Task
 		jt := jsonTask{
 			ID:           t.ID,
 			Status:       t.Status.StatusName(),
@@ -487,6 +661,9 @@ func writeJSON(out io.Writer, tasks []todo.Task) error {
 			Opened:       t.Opened,
 			Claimed:      t.Claimed,
 			Summary:      t.Summary,
+			RepoPath:     lt.repoPath,
+			RepoProject:  lt.repoProject,
+			Disposition:  string(dispositionFor(lt)),
 		}
 		if age := t.AgeDays(); age >= 0 {
 			jt.AgeDays = &age
@@ -499,4 +676,21 @@ func writeJSON(out io.Writer, tasks []todo.Task) error {
 		SchemaVersion: 1,
 		Tasks:         outTasks,
 	})
+}
+
+// dispositionFor returns the companion-note disposition for a listed task.
+func dispositionFor(lt listedTask) todo.Disposition {
+	var notePath string
+	if lt.repoPath != "" {
+		notePath = filepath.Join(lt.repoPath, ".todo", "notes", lt.ID+".md")
+	} else if lt.notesDir != "" {
+		notePath = filepath.Join(lt.notesDir, lt.ID+".md")
+	} else {
+		return todo.DispositionFloat
+	}
+	disp, err := todo.NoteDisposition(notePath)
+	if err != nil {
+		return todo.DispositionFloat
+	}
+	return disp
 }

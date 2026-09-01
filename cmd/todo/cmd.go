@@ -14,6 +14,7 @@ import (
 
 	"gitlab.com/fuzzyporpoise/todo/internal/fs"
 	"gitlab.com/fuzzyporpoise/todo/internal/git"
+	"gitlab.com/fuzzyporpoise/todo/internal/registry"
 )
 
 var (
@@ -43,38 +44,11 @@ func exitError(err error) error {
 // newApp builds the todo command tree. It is separate from Run so tests can
 // inject writers/readers and call app.Run directly.
 func newApp() *cli.Command {
-	var (
-		repoRoot string
-		cfg      appConfig
-	)
-
 	return &cli.Command{
 		Name:                  "todo",
 		Version:               buildVersion(),
 		EnableShellCompletion: true,
 		Usage:                 "manage ad-hoc tasks in .todo/todo.md",
-		Before: func(ctx context.Context, cmd *cli.Command) (context.Context, error) {
-			var err error
-			repoRoot, err = git.RepoRoot()
-			if err != nil {
-				return ctx, exitError(err)
-			}
-
-			cfg = appConfigFor(repoRoot)
-
-			// Allow `init` to run on an uninitialized repo.
-			if cmd.Args().First() == "init" {
-				return ctx, nil
-			}
-			exists, err := fs.VerifyExists(cfg.todoPath)
-			if err != nil {
-				return ctx, exitError(err)
-			}
-			if !exists {
-				return ctx, exitError(errors.New("repo not todo initialized - run `todo init`"))
-			}
-			return ctx, nil
-		},
 		Commands: []*cli.Command{
 			func() *cli.Command {
 				var (
@@ -175,6 +149,10 @@ func newApp() *cli.Command {
 						},
 					},
 					Action: func(ctx context.Context, cmd *cli.Command) error {
+						cfg, err := requireRepoConfig()
+						if err != nil {
+							return exitError(err)
+						}
 						return runAdd(cmd, cfg, addOptions{
 							summary:     summary,
 							priority:    priority,
@@ -192,9 +170,13 @@ func newApp() *cli.Command {
 			}(),
 			{
 				Name:  "init",
-				Usage: "creates todo.md if missing",
+				Usage: "creates todo.md if missing and registers the repo",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
-					return runInit(cfg)
+					root, err := git.RepoRoot()
+					if err != nil {
+						return exitError(err)
+					}
+					return runInit(cmd, appConfigFor(root))
 				},
 			},
 			func() *cli.Command {
@@ -202,6 +184,7 @@ func newApp() *cli.Command {
 					asJSON bool
 					state  string
 					stale  int
+					all    bool
 				)
 				return &cli.Command{
 					Name:    "list",
@@ -212,6 +195,11 @@ func newApp() *cli.Command {
 							Name:        "json",
 							Destination: &asJSON,
 							Usage:       "output machine-readable JSON",
+						},
+						&cli.BoolFlag{
+							Name:        "all",
+							Destination: &all,
+							Usage:       "list tasks across all registered repos",
 						},
 						&cli.IntFlag{
 							Name:        "stale",
@@ -226,11 +214,20 @@ func newApp() *cli.Command {
 						},
 					},
 					Action: func(ctx context.Context, cmd *cli.Command) error {
-						return runList(cmd, cfg, listOptions{
+						opts := listOptions{
 							asJSON: asJSON,
+							all:    all,
 							state:  state,
 							stale:  stale,
-						})
+						}
+						if all {
+							return runList(cmd, appConfig{}, opts)
+						}
+						cfg, err := requireRepoConfig()
+						if err != nil {
+							return exitError(err)
+						}
+						return runList(cmd, cfg, opts)
 					},
 				}
 			}(),
@@ -239,6 +236,10 @@ func newApp() *cli.Command {
 				Usage:     "pick up a task (mark as in progress)",
 				ArgsUsage: "<task>",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
+					cfg, err := requireRepoConfig()
+					if err != nil {
+						return exitError(err)
+					}
 					return runPickup(cmd, cfg)
 				},
 			},
@@ -247,6 +248,10 @@ func newApp() *cli.Command {
 				Usage:     "release a picked-up task back to open (drop its claim)",
 				ArgsUsage: "<task>",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
+					cfg, err := requireRepoConfig()
+					if err != nil {
+						return exitError(err)
+					}
 					return runRelease(cmd, cfg)
 				},
 			},
@@ -255,6 +260,10 @@ func newApp() *cli.Command {
 				Usage:     "reopen a completed task (restore it to open status)",
 				ArgsUsage: "<task>",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
+					cfg, err := requireRepoConfig()
+					if err != nil {
+						return exitError(err)
+					}
 					return runReopen(cmd, cfg)
 				},
 			},
@@ -272,6 +281,10 @@ func newApp() *cli.Command {
 						},
 					},
 					Action: func(ctx context.Context, cmd *cli.Command) error {
+						cfg, err := requireRepoConfig()
+						if err != nil {
+							return exitError(err)
+						}
 						return runBump(cmd, cfg, down)
 					},
 				}
@@ -291,6 +304,10 @@ func newApp() *cli.Command {
 						},
 					},
 					Action: func(ctx context.Context, cmd *cli.Command) error {
+						cfg, err := requireRepoConfig()
+						if err != nil {
+							return exitError(err)
+						}
 						return runRemove(cmd, cfg, removeOptions{deleteNote: deleteNote})
 					},
 				}
@@ -324,6 +341,10 @@ func newApp() *cli.Command {
 						},
 					},
 					Action: func(ctx context.Context, cmd *cli.Command) error {
+						cfg, err := requireRepoConfig()
+						if err != nil {
+							return exitError(err)
+						}
 						return runDetail(cmd, cfg, detailOptions{
 							lines:  lines,
 							noNote: noNote,
@@ -352,10 +373,57 @@ func newApp() *cli.Command {
 						},
 					},
 					Action: func(ctx context.Context, cmd *cli.Command) error {
+						cfg, err := requireRepoConfig()
+						if err != nil {
+							return exitError(err)
+						}
 						return runComplete(cmd, cfg, completeOptions{
 							clear: clear,
 							park:  park,
 						})
+					},
+				}
+			}(),
+			func() *cli.Command {
+				var (
+					all   bool
+					fix   bool
+					depth int
+				)
+				return &cli.Command{
+					Name:      "doctor",
+					Usage:     "reconcile the tracked-folder registry against disk",
+					ArgsUsage: "[paths...]",
+					Flags: []cli.Flag{
+						&cli.BoolFlag{
+							Name:        "all",
+							Destination: &all,
+							Usage:       "scan parent directories of registered repos for unregistered .todo folders",
+						},
+						&cli.BoolFlag{
+							Name:        "fix",
+							Destination: &fix,
+							Usage:       "drop stale entries and register unregistered folders",
+						},
+						&cli.IntFlag{
+							Name:        "depth",
+							Value:       4,
+							Destination: &depth,
+							Usage:       "max depth when scanning for .todo folders",
+						},
+					},
+					Action: func(ctx context.Context, cmd *cli.Command) error {
+						// Positional arguments, if provided, override the scan roots.
+						paths := cmd.Args().Slice()
+						if len(paths) > 0 {
+							return runDoctor(cmd, doctorOptions{
+								all:   all,
+								fix:   fix,
+								depth: depth,
+								roots: paths,
+							})
+						}
+						return runDoctor(cmd, doctorOptions{all: all, fix: fix, depth: depth})
 					},
 				}
 			}(),
@@ -388,8 +456,40 @@ func Run() {
 
 // appConfigFor builds the per-run configuration from the resolved repo root.
 func appConfigFor(repoRoot string) appConfig {
+	if r, err := filepath.EvalSymlinks(repoRoot); err == nil {
+		repoRoot = r
+	}
 	return appConfig{
+		repoRoot: repoRoot,
 		todoPath: filepath.Join(repoRoot, ".todo", "todo.md"),
 		notesDir: filepath.Join(repoRoot, ".todo", "notes"),
 	}
+}
+
+// requireRepoConfig resolves the current git repo, builds its appConfig, and
+// ensures .todo/todo.md exists. Per-repo commands call this; global commands
+// such as init, list --all, and doctor skip it.
+func requireRepoConfig() (appConfig, error) {
+	root, err := git.RepoRoot()
+	if err != nil {
+		return appConfig{}, err
+	}
+	cfg := appConfigFor(root)
+	exists, err := fs.VerifyExists(cfg.todoPath)
+	if err != nil {
+		return appConfig{}, err
+	}
+	if !exists {
+		return appConfig{}, errors.New("repo not todo initialized - run `todo init`")
+	}
+	return cfg, nil
+}
+
+// registryPath returns the path to the machine-local registry. Tests can
+// override it via the TODO_REGISTRY environment variable.
+func registryPath() string {
+	if p := os.Getenv("TODO_REGISTRY"); p != "" {
+		return p
+	}
+	return registry.DefaultPath()
 }
