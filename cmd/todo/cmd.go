@@ -398,7 +398,7 @@ func newApp() *cli.Command {
 						&cli.BoolFlag{
 							Name:        "all",
 							Destination: &all,
-							Usage:       "scan parent directories of registered repos for unregistered .todo folders",
+							Usage:       "scan every registered repo directory downward for unregistered .todo folders",
 						},
 						&cli.BoolFlag{
 							Name:        "fix",

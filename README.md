@@ -40,9 +40,9 @@ todo list --json                            # machine-readable JSON output
 todo list --all                             # list tasks across all registered repos
 todo list --all --json                      # ...with repo_path/repo_project and disposition
 todo doctor                                 # report stale/unregistered registry entries
-todo doctor --all                           # also scan parent dirs of registered repos
+todo doctor --all                           # scan every registered repo directory downward
 todo doctor --fix                           # drop stale entries and register missing repos
-todo doctor --depth 3 /code                 # scan /code up to depth 3 for unregistered .todo folders
+todo doctor --depth 3 /code                 # scan /code downward up to depth 3 for unregistered .todo folders
 todo detail TSK-001                         # show task details + 20-line note preview
 todo detail --lines 5 TSK-001               # preview first 5 lines of the note
 todo detail --no-note TSK-001               # show task details without note preview

@@ -106,21 +106,3 @@ func TestFindUnregistered(t *testing.T) {
 		t.Errorf("found = %q, want %q", found[0], unregistered)
 	}
 }
-
-func TestParentDirs(t *testing.T) {
-	entries := []Entry{
-		{Path: "/code/fuzzyporpoise/todo"},
-		{Path: "/code/fuzzyporpoise/other"},
-		{Path: "/code/polymorcodeus/park"},
-	}
-	dirs := ParentDirs(entries)
-	want := []string{"/code/fuzzyporpoise", "/code/polymorcodeus"}
-	if len(dirs) != len(want) {
-		t.Fatalf("dirs = %v, want %v", dirs, want)
-	}
-	for i, d := range dirs {
-		if d != want[i] {
-			t.Errorf("dirs[%d] = %q, want %q", i, d, want[i])
-		}
-	}
-}

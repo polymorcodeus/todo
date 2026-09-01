@@ -521,7 +521,11 @@ func runDoctor(cmd *cli.Command, opts doctorOptions) error {
 	roots := opts.roots
 	if len(roots) == 0 {
 		if opts.all {
-			roots = registry.ParentDirs(kept)
+			// Scan every registered repo directory downward for nested
+			// .todo folders, rather than walking up to sibling directories.
+			for _, e := range kept {
+				roots = append(roots, e.Path)
+			}
 		} else {
 			cwd, err := os.Getwd()
 			if err != nil {

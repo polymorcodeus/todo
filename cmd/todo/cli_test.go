@@ -531,17 +531,17 @@ func TestDoctorReportsAndFixes(t *testing.T) {
 		t.Fatalf("init repo a: %v", err)
 	}
 
-	repoB := t.TempDir()
-	if err := exec.Command("git", "init", repoB).Run(); err != nil {
-		t.Fatalf("git init repo b: %v", err)
+	nested := filepath.Join(repoA, "nested")
+	if err := exec.Command("git", "init", nested).Run(); err != nil {
+		t.Fatalf("git init nested: %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(repoB, ".todo"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(nested, ".todo"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(repoB, ".todo", "todo.md"), []byte("---\n---\n\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(nested, ".todo", "todo.md"), []byte("---\n---\n\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	repoB, _ = filepath.EvalSymlinks(repoB)
+	nested, _ = filepath.EvalSymlinks(nested)
 
 	missing := filepath.Join(t.TempDir(), "does-not-exist")
 	entries := []registry.Entry{
@@ -552,18 +552,18 @@ func TestDoctorReportsAndFixes(t *testing.T) {
 		t.Fatalf("seed registry: %v", err)
 	}
 
-	out, _, err := runApp(t, []string{"doctor", "--all", "--depth", "1"})
+	out, _, err := runApp(t, []string{"doctor", "--all", "--depth", "2"})
 	if err != nil {
 		t.Fatalf("doctor: %v", err)
 	}
 	if !strings.Contains(out, "stale\t"+missing) {
 		t.Errorf("doctor output missing stale entry: %q", out)
 	}
-	if !strings.Contains(out, "unregistered\t"+repoB) {
+	if !strings.Contains(out, "unregistered\t"+nested) {
 		t.Errorf("doctor output missing unregistered entry: %q", out)
 	}
 
-	_, _, err = runApp(t, []string{"doctor", "--all", "--fix", "--depth", "1"})
+	_, _, err = runApp(t, []string{"doctor", "--all", "--fix", "--depth", "2"})
 	if err != nil {
 		t.Fatalf("doctor --fix: %v", err)
 	}
@@ -579,7 +579,7 @@ func TestDoctorReportsAndFixes(t *testing.T) {
 	for _, e := range fixed {
 		paths[e.Path] = true
 	}
-	if !paths[repoA] || !paths[repoB] || paths[missing] {
+	if !paths[repoA] || !paths[nested] || paths[missing] {
 		t.Errorf("fixed paths = %v", paths)
 	}
 }

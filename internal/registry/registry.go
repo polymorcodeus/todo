@@ -135,7 +135,9 @@ func FindUnregistered(roots []string, maxDepth int, entries []Entry) ([]string, 
 			}
 
 			base := filepath.Base(p)
-			if base == ".todo" || base == ".git" {
+			// Skip the .todo directory itself (the parent is the repo root) and
+			// any hidden directories to avoid unreadable caches/dotfiles.
+			if base == ".todo" || strings.HasPrefix(base, ".") {
 				return filepath.SkipDir
 			}
 
@@ -173,25 +175,4 @@ func FindUnregistered(roots []string, maxDepth int, entries []Entry) ([]string, 
 func hasTodoFile(dir string) bool {
 	_, err := os.Stat(filepath.Join(dir, ".todo", "todo.md"))
 	return err == nil
-}
-
-// ParentDirs returns the parent directories of the registered entries,
-// deduplicated and cleaned. Useful for --all discovery.
-func ParentDirs(entries []Entry) []string {
-	seen := make(map[string]struct{})
-	var dirs []string
-	for _, e := range entries {
-		p := filepath.Clean(e.Path)
-		parent := filepath.Dir(p)
-		if parent == p {
-			continue
-		}
-		if _, ok := seen[parent]; ok {
-			continue
-		}
-		seen[parent] = struct{}{}
-		dirs = append(dirs, parent)
-	}
-	sort.Strings(dirs)
-	return dirs
 }
