@@ -111,15 +111,16 @@ Every companion note carries a write-time disposition in its frontmatter so clea
 
 `todo clear` bulk-removes completed `[x]` tasks based on that disposition:
 
+- no note: remove the task line (nothing to preserve or delete).
 - `work-order`: remove the task line and delete the disposable note.
 - `park`: remove the task line but keep the park record note.
-- `float` (no recognized disposition, including no note): leave the task line and list it for review.
+- `float` (note exists, no recognized disposition): leave the task line and list it for review.
 
 `todo clear --all` applies the same rules across every registered repo. The registry is updated by `todo init` and reconciled with `todo doctor`.
 
 Summaries longer than 120 characters are truncated on the task line (with a trailing `...`) and spilled into a `kind: work-order` note so the full text is preserved. When no note is requested, that note is created automatically.
 
-`todo detail --json` exposes the derived `disposition` field: `park` (has `category`), `work-order` (has `kind: work-order`), or `float` (neither, including notes with no frontmatter).
+`todo detail --json` exposes the derived `disposition` field: `park` (has `category`), `work-order` (has `kind: work-order`), `clear` (no note), or `float` (note exists, neither marker).
 
 ## JSON output
 
@@ -128,7 +129,7 @@ Both `todo list --json` and `todo detail --json` emit stable, machine-readable J
 - `status`: canonical status designation (`open`, `in progress`, `complete`)
 - `status_symbol`: raw checkbox character (` `, `o`, `x`)
 
-`todo list --json` returns an array of tasks with fields: `id`, `status`, `status_symbol`, `priority`, `opened`, `claimed`, `age_days`, `summary`, and `disposition` (`park`, `work-order`, or `float`). When using `todo list --all --json`, each task also includes `repo_path` and `repo_project`.
+`todo list --json` returns an array of tasks with fields: `id`, `status`, `status_symbol`, `priority`, `opened`, `claimed`, `age_days`, `summary`, and `disposition` (`park`, `work-order`, `clear`, or `float`). When using `todo list --all --json`, each task also includes `repo_path` and `repo_project`.
 
 `todo detail --json` returns a single object with fields: `id`, `status`, `status_symbol`, `priority`, `opened`, `opened_days`, `claimed`, `age_days`, `summary`, `disposition`, `note_path`, `note_exists`, `note_preview`, `note_preview_truncated`.
 

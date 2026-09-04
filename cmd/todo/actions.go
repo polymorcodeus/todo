@@ -556,7 +556,7 @@ func runClear(cmd *cli.Command, cfg appConfig, opts clearOptions) error {
 			return exitError(err)
 		}
 
-		if len(res.RemovedWorkOrder) == 0 && len(res.Parked) == 0 && len(res.Float) == 0 {
+		if len(res.RemovedClear) == 0 && len(res.RemovedWorkOrder) == 0 && len(res.Parked) == 0 && len(res.Float) == 0 {
 			if !opts.all {
 				_, _ = fmt.Fprintln(out, "No completed tasks to clear.")
 				printed = true
@@ -569,6 +569,10 @@ func runClear(cmd *cli.Command, cfg appConfig, opts clearOptions) error {
 			prefix = tgt.repo + ": "
 		}
 
+		if len(res.RemovedClear) > 0 {
+			_, _ = fmt.Fprintf(out, "%sremoved (no note): %s\n", prefix, strings.Join(res.RemovedClear, ", "))
+			printed = true
+		}
 		if len(res.RemovedWorkOrder) > 0 {
 			_, _ = fmt.Fprintf(out, "%sremoved work-order: %s\n", prefix, strings.Join(res.RemovedWorkOrder, ", "))
 			printed = true
@@ -778,11 +782,11 @@ func dispositionFor(lt listedTask) todo.Disposition {
 	} else if lt.notesDir != "" {
 		notePath = filepath.Join(lt.notesDir, lt.ID+".md")
 	} else {
-		return todo.DispositionFloat
+		return todo.DispositionClear
 	}
 	disp, err := todo.NoteDisposition(notePath)
 	if err != nil {
-		return todo.DispositionFloat
+		return todo.DispositionClear
 	}
 	return disp
 }

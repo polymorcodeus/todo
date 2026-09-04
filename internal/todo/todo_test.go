@@ -461,7 +461,7 @@ func TestClearByDisposition(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(notesDir, "TSK-002.md"), []byte("---\ncategory: areas\ncreated: 2026-08-02\nsource: repo\nsynopsis: park\n---\n\nbody"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// TSK-003 has no note -> float.
+	// TSK-003 has no note -> clear (removed, no note to delete).
 
 	res, err := Clear(todoPath, notesDir)
 	if err != nil {
@@ -474,8 +474,11 @@ func TestClearByDisposition(t *testing.T) {
 	if len(res.Parked) != 1 || res.Parked[0] != "TSK-002" {
 		t.Errorf("parked = %v, want [TSK-002]", res.Parked)
 	}
-	if len(res.Float) != 1 || res.Float[0] != "TSK-003" {
-		t.Errorf("float = %v, want [TSK-003]", res.Float)
+	if len(res.RemovedClear) != 1 || res.RemovedClear[0] != "TSK-003" {
+		t.Errorf("removed clear = %v, want [TSK-003]", res.RemovedClear)
+	}
+	if len(res.Float) != 0 {
+		t.Errorf("float = %v, want none", res.Float)
 	}
 
 	tasks := readTasks(t, todoPath)
@@ -483,7 +486,7 @@ func TestClearByDisposition(t *testing.T) {
 	for i, t := range tasks {
 		ids[i] = t.ID
 	}
-	want := []string{"TSK-003", "TSK-004"}
+	want := []string{"TSK-004"}
 	if len(ids) != len(want) {
 		t.Fatalf("remaining tasks = %v, want %v", ids, want)
 	}
@@ -1789,7 +1792,19 @@ func TestDetailDisposition(t *testing.T) {
 		t.Errorf("TSK-002 disposition = %q, want work-order", res.Disposition)
 	}
 
-	// No note defaults to float.
+	// No note defaults to clear.
+	res, err = Detail(DetailOptions{TodoPath: todoPath, NotesDir: notesDir, Ref: "3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Disposition != DispositionClear {
+		t.Errorf("TSK-003 disposition = %q, want clear", res.Disposition)
+	}
+
+	// A note with no recognized markers still floats.
+	if err := os.WriteFile(filepath.Join(notesDir, "TSK-003.md"), []byte("plain note\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	res, err = Detail(DetailOptions{TodoPath: todoPath, NotesDir: notesDir, Ref: "3"})
 	if err != nil {
 		t.Fatal(err)

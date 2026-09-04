@@ -23,6 +23,9 @@ const (
 	DispositionWorkOrder Disposition = "work-order"
 	// DispositionFloat marks a note with no recognized disposition.
 	DispositionFloat Disposition = "float"
+	// DispositionClear marks a task with no companion note — the task line
+	// should be removed on clear with no note to preserve.
+	DispositionClear Disposition = "clear"
 )
 
 // defaultRecordSource is stamped into a record's source field when none is

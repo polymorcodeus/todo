@@ -586,8 +586,8 @@ func TestClearLocal(t *testing.T) {
 	if _, _, err := runApp(t, []string{"add", "-n", "--category", "areas", "--synopsis", "park task", "park task"}); err != nil {
 		t.Fatalf("add park: %v", err)
 	}
-	if _, _, err := runApp(t, []string{"add", "float task"}); err != nil {
-		t.Fatalf("add float: %v", err)
+	if _, _, err := runApp(t, []string{"add", "no note task"}); err != nil {
+		t.Fatalf("add no-note: %v", err)
 	}
 
 	if _, _, err := runApp(t, []string{"pickup", "TSK-001"}); err != nil {
@@ -620,8 +620,8 @@ func TestClearLocal(t *testing.T) {
 	if !strings.Contains(out, "TSK-002") {
 		t.Errorf("clear output missing TSK-002: %q", out)
 	}
-	if !strings.Contains(out, "TSK-003") {
-		t.Errorf("clear output missing TSK-003: %q", out)
+	if !strings.Contains(out, "removed (no note)") || !strings.Contains(out, "TSK-003") {
+		t.Errorf("clear output missing no-note removal for TSK-003: %q", out)
 	}
 
 	if _, err := os.Stat(".todo/notes/TSK-001.md"); !os.IsNotExist(err) {
@@ -635,11 +635,8 @@ func TestClearLocal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list after clear: %v", err)
 	}
-	if strings.Contains(out, "TSK-001") || strings.Contains(out, "TSK-002") {
+	if strings.Contains(out, "TSK-001") || strings.Contains(out, "TSK-002") || strings.Contains(out, "TSK-003") {
 		t.Errorf("cleared tasks still listed: %q", out)
-	}
-	if !strings.Contains(out, "TSK-003") {
-		t.Errorf("float task missing after clear: %q", out)
 	}
 }
 
@@ -667,7 +664,7 @@ func TestClearAll(t *testing.T) {
 	if _, _, err := runApp(t, []string{"init"}); err != nil {
 		t.Fatalf("init repo b: %v", err)
 	}
-	if _, _, err := runApp(t, []string{"add", "repo b float"}); err != nil {
+	if _, _, err := runApp(t, []string{"add", "repo b no note"}); err != nil {
 		t.Fatalf("add repo b: %v", err)
 	}
 	if _, _, err := runApp(t, []string{"pickup", "TSK-001"}); err != nil {
@@ -685,8 +682,8 @@ func TestClearAll(t *testing.T) {
 	if !strings.Contains(out, "removed work-order") || !strings.Contains(out, "TSK-001") {
 		t.Errorf("clear --all missing repo a work-order: %q", out)
 	}
-	if !strings.Contains(out, "float (review)") || !strings.Contains(out, "TSK-001") {
-		t.Errorf("clear --all missing repo b float: %q", out)
+	if !strings.Contains(out, "removed (no note)") || !strings.Contains(out, "TSK-001") {
+		t.Errorf("clear --all missing repo b no-note: %q", out)
 	}
 }
 

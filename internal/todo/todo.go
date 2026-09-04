@@ -521,15 +521,17 @@ func Remove(opts RefOptions) (Result, error) {
 // ClearResult describes the outcome of clearing completed tasks from a single
 // repo based on their companion-note disposition.
 type ClearResult struct {
+	RemovedClear     []string // completed IDs removed because no companion note existed
 	RemovedWorkOrder []string // IDs removed and whose notes were deleted
 	Parked           []string // IDs removed but whose park notes were kept
 	Float            []string // completed IDs left in the file for review
 }
 
 // Clear removes completed tasks according to their note disposition:
+//   - no note: delete the task line (nothing to preserve or delete).
 //   - work-order: delete the task line and its disposable note.
 //   - park: delete the task line but preserve the park record note.
-//   - float (no recognized disposition): leave the task line for manual review.
+//   - float (note exists, no recognized disposition): leave the task line for manual review.
 func Clear(todoPath, notesDir string) (ClearResult, error) {
 	tasks, h, err := parseTodoFile(todoPath)
 	if err != nil {
@@ -549,7 +551,9 @@ func Clear(todoPath, notesDir string) (ClearResult, error) {
 		notePath := filepath.Join(notesDir, t.ID+".md")
 		disp, err := NoteDisposition(notePath)
 		if err != nil {
-			disp = DispositionFloat
+			result.RemovedClear = append(result.RemovedClear, t.ID)
+			wrote = true
+			continue
 		}
 
 		switch disp {
@@ -1013,7 +1017,7 @@ type DetailResult struct {
 	Task          Task
 	NotePath      string
 	NoteExists    bool
-	Disposition   Disposition // park, work-order, or float; float when no note
+	Disposition   Disposition // park, work-order, clear (no note), or float
 	NotePreview   string      // first Lines lines of the note, if any
 	NoteTruncated bool        // true when more lines exist beyond the preview
 }
@@ -1041,7 +1045,7 @@ func Detail(opts DetailOptions) (DetailResult, error) {
 		Task:        task,
 		NotePath:    notePath,
 		NoteExists:  exists,
-		Disposition: DispositionFloat,
+		Disposition: DispositionClear,
 	}
 
 	if exists {
