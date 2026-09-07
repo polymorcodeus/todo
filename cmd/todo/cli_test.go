@@ -500,6 +500,51 @@ func TestAddDispositionRequiresNote(t *testing.T) {
 	}
 }
 
+func TestAddContentFlagsImplyNote(t *testing.T) {
+	setupGitRepo(t)
+
+	if _, _, err := runApp(t, []string{"init"}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+
+	// --note-content without --note creates the note.
+	if _, _, err := runApp(t, []string{"add", "-s", "x", "--note-content", "y"}); err != nil {
+		t.Fatalf("add --note-content: %v", err)
+	}
+	data, err := os.ReadFile(".todo/notes/TSK-001.md")
+	if err != nil {
+		t.Fatalf("note not created: %v", err)
+	}
+	if !strings.HasSuffix(string(data), "\n\ny\n") {
+		t.Errorf("note content = %q, want body y", string(data))
+	}
+
+	// --note-file without --note copies the file into the note.
+	src := filepath.Join(t.TempDir(), "n.md")
+	if err := os.WriteFile(src, []byte("file body"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := runApp(t, []string{"add", "-s", "z", "--note-file", src}); err != nil {
+		t.Fatalf("add --note-file: %v", err)
+	}
+	data, err = os.ReadFile(".todo/notes/TSK-002.md")
+	if err != nil {
+		t.Fatalf("note not created: %v", err)
+	}
+	if !strings.HasSuffix(string(data), "\n\nfile body\n") {
+		t.Errorf("note content = %q, want copied body", string(data))
+	}
+
+	// --dry-run previews the would-be note path for content-flag adds.
+	out, _, err := runApp(t, []string{"add", "--dry-run", "-s", "x", "--note-content", "y"})
+	if err != nil {
+		t.Fatalf("add --dry-run: %v", err)
+	}
+	if !strings.Contains(out, "would create note: ") {
+		t.Errorf("dry-run output = %q, want note path", out)
+	}
+}
+
 func TestInitRegistersRepo(t *testing.T) {
 	dir := setupGitRepo(t)
 	dir, _ = filepath.EvalSymlinks(dir)

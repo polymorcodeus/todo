@@ -66,12 +66,12 @@ func newApp() *cli.Command {
 				noteContentFlag := &cli.StringFlag{
 					Name:        "note-content",
 					Destination: &noteContent,
-					Usage:       "content to write into the note; use '-' to read from stdin",
+					Usage:       "content to write into the note (implies --note); use '-' to read from stdin",
 				}
 				noteFileFlag := &cli.StringFlag{
 					Name:        "note-file",
 					Destination: &noteFile,
-					Usage:       "copy an existing file into the note (copy, not move)",
+					Usage:       "copy an existing file into the note (implies --note; copy, not move)",
 				}
 				kindFlag := &cli.StringFlag{
 					Name:        "kind",
@@ -118,7 +118,7 @@ func newApp() *cli.Command {
 							Name:        "create-note",
 							Aliases:     []string{"n"},
 							Destination: &create,
-							Usage:       "create a companion note file (reads content from stdin unless --note-content/--note-file given)",
+							Usage:       "create a companion note file (optional when --note-content/--note-file given; otherwise reads content from stdin)",
 						},
 						noteContentFlag,
 						noteFileFlag,

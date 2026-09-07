@@ -87,8 +87,12 @@ func runAdd(cmd *cli.Command, cfg appConfig, opts addOptions) error {
 		return exitError(errors.New("task summary required: provide as first argument or --summary"))
 	}
 
+	// Content flags imply note creation, so --note-content/--note-file do not
+	// require a separate --note.
+	createNote := opts.create || opts.noteContent != "" || opts.noteFile != ""
+
 	// Disposition flags only make sense when a note is being created.
-	if !opts.create && (opts.kind != "" || opts.category != "" || opts.synopsis != "" || opts.source != "") {
+	if !createNote && (opts.kind != "" || opts.category != "" || opts.synopsis != "" || opts.source != "") {
 		return exitError(errors.New("note disposition flags (--kind/--category/--synopsis/--source) require --note"))
 	}
 
@@ -96,7 +100,7 @@ func runAdd(cmd *cli.Command, cfg appConfig, opts addOptions) error {
 	// --note-file copy (handled internally by Add), else read note content
 	// from stdin.
 	content := opts.noteContent
-	if content == "-" || (content == "" && opts.create && opts.noteFile == "") {
+	if content == "-" || (content == "" && createNote && opts.noteFile == "") {
 		data, err := io.ReadAll(inReader(cmd))
 		if err != nil {
 			return exitError(fmt.Errorf("read note stdin: %w", err))
@@ -109,7 +113,7 @@ func runAdd(cmd *cli.Command, cfg appConfig, opts addOptions) error {
 		NotesDir:    cfg.notesDir,
 		Priority:    opts.priority,
 		Summary:     opts.summary,
-		CreateNote:  opts.create,
+		CreateNote:  createNote,
 		NoteContent: content,
 		NoteFile:    opts.noteFile,
 		DryRun:      opts.dryRun,

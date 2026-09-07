@@ -26,10 +26,10 @@ todo init                                   # create .todo/todo.md if missing an
 todo add "fix the thing"                    # add a task (default priority: med)
 todo add -p high "urgent issue"             # add with priority (low|med|high)
 todo add -s "summaries also via flag"       # summary via flag
-todo add -n --note-content "body" "task"    # create a note with content
+todo add --note-content "body" "task"       # create a note with content (no -n needed)
 echo "body" | todo add -n "task"            # ...or read note content from stdin
-todo add -n --note-file ./draft.md "task"   # ...or copy an existing file (not move)
-todo add --dry-run -s "x" -n "task"         # preview the would-be line + note, no write
+todo add --note-file ./draft.md "task"      # ...or copy an existing file (not move; no -n needed)
+todo add --dry-run -s "x" --note-content "y" # preview the would-be line + note, no write
 todo add -n --kind work-order "task"        # note is a disposable work order
 todo add -n --category areas --synopsis "one line" --source repo "task"  # note is a park record
 todo add "an over-long summary (over 120 chars) ..."                    # long summaries truncate on the line and spill into a work-order note
