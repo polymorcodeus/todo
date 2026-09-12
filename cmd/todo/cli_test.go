@@ -89,6 +89,20 @@ func TestAddWithoutSummaryErrors(t *testing.T) {
 	}
 }
 
+func TestAddHelpDocumentsSummaryCap(t *testing.T) {
+	setupGitRepo(t)
+
+	out, _, err := runApp(t, []string{"add", "--help"})
+	if err != nil {
+		t.Fatalf("add --help: %v", err)
+	}
+	for _, want := range []string{"120 runes", "work-order note"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("add --help missing %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestListJSON(t *testing.T) {
 	setupGitRepo(t)
 

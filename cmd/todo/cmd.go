@@ -112,7 +112,7 @@ func newApp() *cli.Command {
 							Name:        "summary",
 							Aliases:     []string{"s"},
 							Destination: &summary,
-							Usage:       "summary text (alternative to positional arg)",
+							Usage:       "summary text (alternative to positional arg); over 120 runes truncates on the line with '...' and spills the full text into a work-order note (auto-created when no note is requested)",
 						},
 						&cli.BoolFlag{
 							Name:        "create-note",
