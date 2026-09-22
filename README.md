@@ -88,7 +88,7 @@ State rules:
 - `pickup` only works on an open `[ ]` task.
 - `complete` only works on an in-progress `[o]` task (i.e. one you picked up).
 - `release` also only works on an in-progress `[o]` task; it returns it to `[ ]` and drops the claim.
-- `remove` works on any status line (including `[x]` done lines) and deletes it; `--note` also deletes the companion note file.
+- `remove` works on any status line (including `[x]` done lines) and deletes it; `--note` also deletes the companion note file. When that note is a symlink, the target it points at is deleted first and the link after, so lnk-managed notes leave neither an orphaned target nor a dangling link.
 - `reopen` works on a completed `[x]` task and restores it to `[ ]`; it is a no-op if the task is already open.
 - `bump` works on any task regardless of status; it cycles priority up (`low->med->high->no-op`) or down (`high->med->low->no-op`) via `--down`. No-op at boundaries writes nothing.
 - `pickup` records the `claimed:` date; `complete`/`release`/`reopen` drop it.
@@ -128,16 +128,16 @@ Every companion note carries a write-time disposition in its frontmatter so clea
 
 `todo clear` bulk-removes completed `[x]` tasks based on that disposition:
 
-- no note: remove the task line (nothing to preserve or delete).
-- `work-order`: remove the task line and delete the disposable note.
+- no note file: remove the task line (nothing to preserve or delete).
+- `work-order`: remove the task line and delete the disposable note (symlink-aware, exactly like `remove --note`).
 - `park`: remove the task line but keep the park record note.
-- `float` (note exists, no recognized disposition): leave the task line and list it for review.
+- `float` (note exists with no recognized disposition, or the note cannot be read): leave the task line and list it for review. Only a genuinely missing note file counts as "no note", so an unreadable note is never discarded by accident.
 
 `todo clear --all` applies the same rules across every registered repo. The registry is updated by `todo init` and reconciled with `todo doctor`.
 
 Summaries longer than 120 characters are truncated on the task line (with a trailing `...`) and spilled into a `kind: work-order` note so the full text is preserved. When no note is requested, that note is created automatically.
 
-`todo detail --json` exposes the derived `disposition` field: `park` (has `category`), `work-order` (has `kind: work-order`), `clear` (no note), or `float` (note exists, neither marker).
+`todo detail --json` exposes the derived `disposition` field: `park` (has `category`), `work-order` (has `kind: work-order`), `clear` (no note), or `float` (note exists, neither marker). `todo detail` itself reports an unreadable note as an error rather than a disposition.
 
 ## JSON output
 

@@ -504,6 +504,34 @@ func TestClearByDisposition(t *testing.T) {
 	}
 }
 
+func TestClearUnreadableNoteFloats(t *testing.T) {
+	todoPath, notesDir := writeTestTodo(t, []Task{
+		{ID: "TSK-001", Priority: "med", Opened: "2026-08-01", Status: StatusDone, Summary: "unreadable note"},
+	})
+	// A directory where the note file is expected makes the read fail with
+	// something other than "not exist".
+	if err := os.MkdirAll(filepath.Join(notesDir, "TSK-001.md"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := Clear(todoPath, notesDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(res.Float) != 1 || res.Float[0] != "TSK-001" {
+		t.Errorf("float = %v, want [TSK-001]", res.Float)
+	}
+	if len(res.RemovedClear) != 0 {
+		t.Errorf("removed clear = %v, want none", res.RemovedClear)
+	}
+
+	tasks := readTasks(t, todoPath)
+	if len(tasks) != 1 || tasks[0].ID != "TSK-001" {
+		t.Errorf("remaining tasks = %v, want [TSK-001]", tasks)
+	}
+}
+
 func TestAddDryRun(t *testing.T) {
 	fixed := time.Date(2026, 8, 18, 10, 30, 0, 0, time.UTC)
 	setNow(func() time.Time { return fixed })

@@ -166,18 +166,7 @@ func runInit(cmd *cli.Command, cfg appConfig) error {
 		return exitError(err)
 	}
 
-	remote := git.RemoteURL("origin")
-	host, owner := git.ParseRemote(remote)
-	project := filepath.Base(cfg.repoRoot)
-
-	entries = registry.Upsert(entries, cfg.repoRoot, remote, project)
-	for i := range entries {
-		if filepath.Clean(entries[i].Path) == filepath.Clean(cfg.repoRoot) {
-			entries[i].Host = host
-			entries[i].Owner = owner
-			break
-		}
-	}
+	entries = registerRepo(entries, cfg.repoRoot)
 
 	if err := registry.Save(registryPath(), entries); err != nil {
 		return exitError(err)
@@ -302,6 +291,24 @@ func projectFromEntry(e registry.Entry) string {
 		return e.Project
 	}
 	return filepath.Base(e.Path)
+}
+
+// registerRepo upserts a repo folder into the registry, stamping its git
+// remote, parsed host/owner, and project name. init and doctor both go through
+// here so a registered repo looks the same however it was discovered.
+func registerRepo(entries []registry.Entry, path string) []registry.Entry {
+	remote := git.RemoteURLAt(path, "origin")
+	host, owner := git.ParseRemote(remote)
+
+	entries = registry.Upsert(entries, path, remote, filepath.Base(path))
+	for i := range entries {
+		if filepath.Clean(entries[i].Path) == filepath.Clean(path) {
+			entries[i].Host = host
+			entries[i].Owner = owner
+			break
+		}
+	}
+	return entries
 }
 
 func runPickup(cmd *cli.Command, cfg appConfig) error {
@@ -646,17 +653,7 @@ func runDoctor(cmd *cli.Command, opts doctorOptions) error {
 
 	if opts.fix {
 		for _, p := range unregistered {
-			remote := git.RemoteURLAt(p, "origin")
-			host, owner := git.ParseRemote(remote)
-			project := filepath.Base(p)
-			kept = registry.Upsert(kept, p, remote, project)
-			for i := range kept {
-				if filepath.Clean(kept[i].Path) == filepath.Clean(p) {
-					kept[i].Host = host
-					kept[i].Owner = owner
-					break
-				}
-			}
+			kept = registerRepo(kept, p)
 		}
 		if err := registry.Save(registryPath(), kept); err != nil {
 			return exitError(err)
@@ -745,8 +742,6 @@ type jsonListEnvelope struct {
 	Tasks         []jsonTask `json:"tasks"`
 }
 
-// writeJSON emits tasks in a versioned envelope with a stable schema for
-// machine consumers.
 // writeJSON emits tasks in a versioned envelope with a stable schema for
 // machine consumers.
 func writeJSON(out io.Writer, tasks []listedTask) error {

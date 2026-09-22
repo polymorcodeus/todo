@@ -3,6 +3,7 @@ package todo
 
 import (
 	"bufio"
+	"cmp"
 	"errors"
 	"fmt"
 	"io"
@@ -335,7 +336,10 @@ func Init(todoPath string) error {
 
 	current := now()
 	h := header{
-		project:      filepath.Base(repo),
+		// The repo root is the grandparent of the todo file; derive the
+		// project name from it so a missing remote yields a real name
+		// instead of ".".
+		project:      filepath.Base(filepath.Dir(filepath.Dir(todoPath))),
 		repo:         repo,
 		configured:   current.Format("2006-01-02"),
 		lastUpdated:  current.Format("2006-01-02T15:04"),
@@ -348,10 +352,6 @@ func Init(todoPath string) error {
 	return nil
 }
 
-// Pickup marks the referenced task as in progress and returns its updated line
-// plus the full path of its companion note, if any.
-// Pickup marks the referenced task as in progress and returns its updated line
-// plus the full path of its companion note, if any.
 // Pickup marks the referenced task as in progress and returns its updated line
 // plus the full path of its companion note, if any.
 func Pickup(opts RefOptions) (Result, error) {
@@ -375,12 +375,6 @@ func Pickup(opts RefOptions) (Result, error) {
 }
 
 // Complete marks the referenced task done (or removes its line when clear is
-// true) and returns the resulting line plus the full path of its companion
-// note, if any.
-// Complete marks the referenced task done (or removes its line when clear is
-// true) and returns the resulting line plus the full path of its companion
-// note, if any.
-// Complete marks the referenced task done (or removes its line when Clear is
 // true) and returns the resulting line plus the full path of its companion
 // note, if any.
 func Complete(opts CompleteOptions) (Result, error) {
@@ -416,12 +410,6 @@ func Complete(opts CompleteOptions) (Result, error) {
 	return writeUpdated(opts.TodoPath, h, tasks, idx, opts.NotesDir)
 }
 
-// Release returns a picked-up task to open and drops its claimed date. It only
-// accepts an in-progress task and returns the resulting line plus the full
-// path of its companion note, if any.
-// Release returns a picked-up task to open and drops its claimed date. It only
-// accepts an in-progress task and returns the resulting line plus the full
-// path of its companion note, if any.
 // Release returns a picked-up task to open and drops its claimed date. It only
 // accepts an in-progress task and returns the resulting line plus the full
 // path of its companion note, if any.
@@ -489,10 +477,6 @@ func Reopen(opts RefOptions) (ReopenResult, error) {
 
 // Remove deletes the referenced task line regardless of its status and returns
 // the removed line (unchanged) plus the full path of its companion note, if any.
-// Remove deletes the referenced task line regardless of its status and returns
-// the removed line (unchanged) plus the full path of its companion note, if any.
-// Remove deletes the referenced task line regardless of its status and returns
-// the removed line (unchanged) plus the full path of its companion note, if any.
 func Remove(opts RefOptions) (Result, error) {
 	tasks, h, err := parseTodoFile(opts.TodoPath)
 	if err != nil {
@@ -531,7 +515,8 @@ type ClearResult struct {
 //   - no note: delete the task line (nothing to preserve or delete).
 //   - work-order: delete the task line and its disposable note.
 //   - park: delete the task line but preserve the park record note.
-//   - float (note exists, no recognized disposition): leave the task line for manual review.
+//   - float (a note exists but has no recognized disposition, or cannot be
+//     read at all): leave the task line for manual review.
 func Clear(todoPath, notesDir string) (ClearResult, error) {
 	tasks, h, err := parseTodoFile(todoPath)
 	if err != nil {
@@ -551,8 +536,16 @@ func Clear(todoPath, notesDir string) (ClearResult, error) {
 		notePath := filepath.Join(notesDir, t.ID+".md")
 		disp, err := NoteDisposition(notePath)
 		if err != nil {
-			result.RemovedClear = append(result.RemovedClear, t.ID)
-			wrote = true
+			if errors.Is(err, os.ErrNotExist) {
+				// No companion note exists: nothing to preserve or delete.
+				result.RemovedClear = append(result.RemovedClear, t.ID)
+				wrote = true
+				continue
+			}
+			// The note exists but cannot be read (permissions, I/O). Keep the
+			// line so an unreadable note is never discarded by accident.
+			remaining = append(remaining, t)
+			result.Float = append(result.Float, t.ID)
 			continue
 		}
 
@@ -645,8 +638,6 @@ func bumpPriority(p Priority, down bool) Priority {
 	}
 }
 
-// writeUpdated persists tasks after a status change and returns the updated
-// line and note for the task at idx.
 // writeUpdated persists tasks after a status change and returns the updated
 // line and note for the task at idx.
 func writeUpdated(todoPath string, h header, tasks []Task, idx int, notesDir string) (Result, error) {
@@ -777,7 +768,7 @@ func sortTasks(tasks []Task, field SortField, reverse bool) {
 func taskCompare(a, b Task, field SortField, reverse bool) int {
 	switch field {
 	case SortFieldPriority:
-		return applyReverse(compareRank(priorityRank(a.Priority), priorityRank(b.Priority)), reverse)
+		return applyReverse(cmp.Compare(priorityRank(a.Priority), priorityRank(b.Priority)), reverse)
 	case SortFieldOpened:
 		return applyReverse(strings.Compare(a.Opened, b.Opened), reverse)
 	case SortFieldClaimed:
@@ -802,16 +793,6 @@ func priorityRank(p Priority) int {
 	case PriorityMed:
 		return 2
 	case PriorityLow:
-		return 1
-	}
-	return 0
-}
-
-func compareRank(a, b int) int {
-	if a < b {
-		return -1
-	}
-	if a > b {
 		return 1
 	}
 	return 0
@@ -844,7 +825,7 @@ func compareNullableInt(a, b, missing int, reverse bool) int {
 	if bMissing {
 		return -1
 	}
-	return applyReverse(compareRank(a, b), reverse)
+	return applyReverse(cmp.Compare(a, b), reverse)
 }
 
 // AgeDays returns the number of full days since the task was claimed, or -1

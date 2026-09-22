@@ -485,8 +485,7 @@ func Run() {
 		// HandleExitCoder prints ExitCoder messages (no timestamp) and usage
 		// errors are shown as "Incorrect Usage". Only the exit code is left.
 		code := 1
-		var exitErr cli.ExitCoder
-		if errors.As(err, &exitErr) {
+		if exitErr, ok := errors.AsType[cli.ExitCoder](err); ok {
 			code = exitErr.ExitCode()
 		}
 		os.Exit(code)

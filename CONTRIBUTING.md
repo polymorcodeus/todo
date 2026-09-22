@@ -60,6 +60,8 @@ Control flow: per-repo commands resolve the repo root through `requireRepoConfig
 ### Companion notes
 
 - Notes live at `.todo/notes/<ID>.md` and are plain Markdown, edited by hand or by the CLI. The binary only deletes a note on explicit request (`remove --note`) or when `clear` identifies it as a disposable work order.
+- Note deletion always goes through `fs.RemoveFollowingSymlink`, which removes a symlink's resolved target before the link itself. That is deliberate: notes in this suite are commonly lnk-managed symlinks into a central store, so unlinking alone would orphan the target. Do not swap it for a plain `os.Remove`, and keep the tests in `cmd/todo/cli_test.go` (symlinked note) and `internal/fs` covering it.
+- `clear` separates a missing note from an unreadable one: `os.ErrNotExist` means "no note" and the task line is removed, while any other read error leaves the line in place and reports the task as `float`. An unreadable note must never be deleted by accident.
 - Every note carries a write-time disposition in its frontmatter (`kind: work-order`, or park record fields `category`/`created`/`source`/`synopsis`). `clear` and `detail --json` both read it, so changes to the markers in `internal/todo/note.go` must update `README.md` and the tests together.
 - Summaries longer than 120 runes are truncated on the task line and spilled into a work-order note. Park records are exempt: their `synopsis` carries the full text.
 
