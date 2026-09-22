@@ -1,3 +1,9 @@
+<p align="center">
+  <source media="(prefers-color-scheme: dark)" srcset="images/todo-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/todo-light.png">
+  <img alt="Project Logo" src="images/todo-dark.png" width="128">
+</p>
+
 # todo
 
 [![Go Version](https://img.shields.io/github/go-mod/go-version/polymorcodeus/todo)](https://go.dev/) [![Build Status](https://img.shields.io/github/actions/workflow/status/polymorcodeus/todo/ci.yml?branch=main)](https://github.com/polymorcodeus/todo/actions) [![License](https://img.shields.io/github/license/polymorcodeus/todo)](./LICENSE)
