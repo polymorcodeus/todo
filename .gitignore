@@ -1,19 +1,15 @@
-# Binaries for programs and plugins
-*.exe
-*.exe~
-*.dll
-*.so
-*.dylib
+# Build output
+/todo
+/bin/
+/dist/
 
-# Test binary, built with `go test -c`
+# Test coverage (make test-cover)
+coverage.out
+coverage.html
+
+# Compiled test binaries (go test -c)
 *.test
 
-# Output of the go coverage tool
-*.out
-
-# Go workspace file
+# Go workspace
 go.work
 go.work.sum
-
-# Built binary
-/todo

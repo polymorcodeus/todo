@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"gitlab.com/fuzzyporpoise/todo/internal/fs"
-	"gitlab.com/fuzzyporpoise/todo/internal/git"
+	"github.com/polymorcodeus/todo/internal/fs"
+	"github.com/polymorcodeus/todo/internal/git"
 )
 
 // now is the clock; tests override it via setNow to make behavior deterministic.

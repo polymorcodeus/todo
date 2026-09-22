@@ -13,7 +13,7 @@ func TestParseRemote(t *testing.T) {
 	}{
 		{"ssh short", "git@github.com:polymorcodeus/park.git", "github.com", "polymorcodeus"},
 		{"https", "https://github.com/polymorcodeus/park.git", "github.com", "polymorcodeus"},
-		{"https no suffix", "https://gitlab.com/fuzzyporpoise/todo", "gitlab.com", "fuzzyporpoise"},
+		{"https no suffix", "https://github.com/polymorcodeus/todo", "github.com", "polymorcodeus"},
 		{"scp-like", "github.com:owner/repo.git", "github.com", "owner"},
 		{"empty", "", "", ""},
 		{"local path", "/code/repo", "", ""},

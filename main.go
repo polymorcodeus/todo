@@ -5,7 +5,7 @@ import (
 	_ "embed"
 	"strings"
 
-	cmd "gitlab.com/fuzzyporpoise/todo/cmd/todo"
+	cmd "github.com/polymorcodeus/todo/cmd/todo"
 )
 
 //go:embed VERSION

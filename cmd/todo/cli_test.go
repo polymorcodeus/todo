@@ -12,7 +12,7 @@ import (
 
 	"github.com/urfave/cli/v3"
 
-	"gitlab.com/fuzzyporpoise/todo/internal/registry"
+	"github.com/polymorcodeus/todo/internal/registry"
 )
 
 func setupGitRepo(t *testing.T) string {

@@ -1,4 +1,4 @@
-module gitlab.com/fuzzyporpoise/todo
+module github.com/polymorcodeus/todo
 
 go 1.26.4
 

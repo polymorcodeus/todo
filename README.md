@@ -1,21 +1,38 @@
 # todo
 
-Manage an ad-hoc task list in a plain Markdown file, `.todo/todo.md`, stored in the root of a git repo. Designed for agents and scripts: everything is a version-controllable text file, with optional companion notes.
+[![Go Version](https://img.shields.io/github/go-mod/go-version/polymorcodeus/todo)](https://go.dev/) [![Build Status](https://img.shields.io/github/actions/workflow/status/polymorcodeus/todo/ci.yml?branch=main)](https://github.com/polymorcodeus/todo/actions) [![License](https://img.shields.io/github/license/polymorcodeus/todo)](./LICENSE)
 
-## Installation
+**An ad-hoc task list that lives in a plain Markdown file, `.todo/todo.md`, inside your git repo.**
 
-Requires Go 1.26+ and `make`.
+Part of the [polymorcodeus](https://github.com/polymorcodeus) suite of CLI tooling for dotfile and knowledge management.
+
+Manage an ad-hoc task list in a plain Markdown file, `.todo/todo.md`, stored in the root of a git repo. Designed for agents and scripts: everything is a version-controllable text file, with optional companion notes. Every read command has a `--json` mode, task IDs are never recycled, and companion notes at `.todo/notes/<ID>.md` carry the full brief for a task.
+
+## Install
+
+Quick install (downloads the latest release to `/usr/local/bin`):
 
 ```sh
-make install   # builds and copies the binary to /usr/local/bin
+curl -sSL https://raw.githubusercontent.com/polymorcodeus/todo/main/install.sh | bash
 ```
 
-Or build/install manually:
+The `go install` and source builds require Go 1.26.4+.
+
+Or install via Go:
 
 ```sh
-go install .   # uses the embedded VERSION file
-go build -o todo .
+go install github.com/polymorcodeus/todo@latest
 ```
+
+Or build from source:
+
+```sh
+git clone https://github.com/polymorcodeus/todo.git
+cd todo
+make build
+```
+
+`make install` builds the binary and copies it to `/usr/local/bin`.
 
 ## Usage
 
@@ -142,8 +159,28 @@ make check       # fmt + vet + lint + test
 make build       # build ./todo binary
 make test        # run tests
 make lint        # golangci-lint (only if installed)
+make deps        # install golangci-lint and goreleaser
 ```
+
+Release tooling:
+
+```sh
+make cross-compile         # build for linux/darwin/windows (legacy, no archives)
+make release               # cross-compile plus checksums in dist/
+make goreleaser-check      # validate .goreleaser.yml
+make goreleaser-snapshot   # build a snapshot release with GoReleaser
+```
+
+Tags matching `v*` trigger the release workflow, which publishes archives, checksums, and a changelog to GitHub Releases. See [CONTRIBUTING.md](./CONTRIBUTING.md) for package boundaries and conventions.
 
 ## Versioning
 
 Version comes from the `VERSION` file for local/`go install` builds, and is overridden by `-ldflags` at release build time.
+
+## Contributing
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md). Run `make check` before opening a PR.
+
+## License
+
+[MIT](./LICENSE) (c) Aaron Martell

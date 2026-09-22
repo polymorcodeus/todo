@@ -12,9 +12,9 @@ import (
 	validation "github.com/urfave/cli-validation"
 	"github.com/urfave/cli/v3"
 
-	"gitlab.com/fuzzyporpoise/todo/internal/fs"
-	"gitlab.com/fuzzyporpoise/todo/internal/git"
-	"gitlab.com/fuzzyporpoise/todo/internal/registry"
+	"github.com/polymorcodeus/todo/internal/fs"
+	"github.com/polymorcodeus/todo/internal/git"
+	"github.com/polymorcodeus/todo/internal/registry"
 )
 
 var (

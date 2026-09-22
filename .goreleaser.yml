@@ -1,0 +1,105 @@
+version: 2
+
+project_name: todo
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - windows
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.buildTime={{.Date}}
+    main: ./main.go
+    binary: todo
+
+archives:
+  - formats:
+      - tar.gz
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+      {{- if .Arm }}v{{ .Arm }}{{ end }}
+    files:
+      - README.md
+      - LICENSE
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+      - "^chore:"
+      - "^style:"
+      - "^refactor:"
+      - Merge pull request
+      - Merge branch
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
+      order: 0
+    - title: "Bug fixes"
+      regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
+      order: 1
+    - title: Others
+      order: 999
+
+release:
+  github:
+    owner: polymorcodeus
+    name: todo
+  draft: false
+  prerelease: auto
+  mode: replace
+  header: |
+    ## todo {{.Tag}}
+
+    An ad-hoc task list that lives in a plain Markdown file (`.todo/todo.md`) inside your git repo.
+
+    ### Installation
+
+    ```bash
+    # Quick install
+    curl -sSL https://raw.githubusercontent.com/polymorcodeus/todo/main/install.sh | bash
+
+    # Homebrew
+    # not yet supported
+
+    # Manual download
+    # Download the appropriate archive for your platform from the assets below
+    # Extract and move to your PATH:
+    # tar -xzf todo_*.tar.gz && sudo mv todo /usr/local/bin/
+    ```
+
+  footer: |
+    ---
+    **Full Changelog**: https://github.com/polymorcodeus/todo/compare/{{.PreviousTag}}...{{.Tag}}
