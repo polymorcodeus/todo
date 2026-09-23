@@ -7,7 +7,7 @@ import (
 )
 
 func TestLoadMissingReturnsEmpty(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "missing", ".todocache")
+	path := filepath.Join(t.TempDir(), "missing", "registry.json")
 	entries, err := Load(path)
 	if err != nil {
 		t.Fatalf("Load missing: %v", err)
@@ -18,7 +18,7 @@ func TestLoadMissingReturnsEmpty(t *testing.T) {
 }
 
 func TestSaveAndLoad(t *testing.T) {
-	path := filepath.Join(t.TempDir(), ".todocache")
+	path := filepath.Join(t.TempDir(), "registry.json")
 	want := []Entry{
 		{Path: "/code/foo", Project: "foo", Repo: "git@example.com:org/foo", LastSeen: "2026-09-01T00:00:00Z"},
 	}

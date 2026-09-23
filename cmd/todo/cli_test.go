@@ -23,7 +23,7 @@ func setupGitRepo(t *testing.T) string {
 		t.Fatalf("git init: %v", err)
 	}
 	t.Chdir(dir)
-	t.Setenv("TODO_REGISTRY", filepath.Join(dir, ".todocache"))
+	t.Setenv("TODO_REGISTRY", filepath.Join(dir, "registry.json"))
 	return dir
 }
 

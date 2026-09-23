@@ -22,13 +22,17 @@ type Entry struct {
 	LastSeen string `json:"last_seen"`
 }
 
-// DefaultPath returns the default registry file path: ~/.config/.todocache.
+// DefaultPath returns the default registry file path:
+// $XDG_CACHE_HOME/todo/registry.json, or ~/.cache/todo/registry.json.
 func DefaultPath() string {
+	if cacheHome := os.Getenv("XDG_CACHE_HOME"); cacheHome != "" {
+		return filepath.Join(cacheHome, "todo", "registry.json")
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return ".todocache"
+		return "todo-registry.json"
 	}
-	return filepath.Join(home, ".config", ".todocache")
+	return filepath.Join(home, ".cache", "todo", "registry.json")
 }
 
 // Load reads the registry from path. A missing file is treated as an empty
