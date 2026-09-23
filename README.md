@@ -123,7 +123,7 @@ Status is `[ ]` open, `[o]` in progress, `[x]` done. `claimed:` records when a t
 
 ## Registry
 
-Every `todo init` registers the repo in a machine-local JSON cache at `~/.config/.todocache`. The registry stores the absolute repo path, project name, git remote URL, parsed host/owner, and a `last_seen` timestamp. `todo list --all` and `todo doctor` use this cache to operate across tracked folders without `cd`ing.
+Every `todo init` registers the repo in a machine-local JSON cache at `$XDG_CACHE_HOME/todo/registry.json` (falling back to `~/.cache/todo/registry.json`). The registry stores the absolute repo path, project name, git remote URL, parsed host/owner, and a `last_seen` timestamp. `todo list --all` and `todo doctor` use this cache to operate across tracked folders without `cd`ing.
 
 ## Note disposition
 
