@@ -72,7 +72,9 @@ todo doctor --depth 3 /code                 # scan /code downward up to depth 3 
 todo detail TSK-001                         # show task details + 20-line note preview
 todo detail --lines 5 TSK-001               # preview first 5 lines of the note
 todo detail --no-note TSK-001               # show task details without note preview
+todo detail --full TSK-001                  # show the complete note body
 todo detail --json TSK-001                  # machine-readable detail output
+todo detail --json --full TSK-001           # ...with the complete note body in note_body
 todo pickup TSK-001                         # mark a task in progress (adds claimed date)
 todo release TSK-001                        # release a picked-up task back to open (drop claim)
 todo complete TSK-001                       # mark a task done (drops claimed)
@@ -156,7 +158,9 @@ Both `todo list --json` and `todo detail --json` emit stable, machine-readable J
 
 `todo detail --json` returns a single object with fields: `id`, `status`, `status_symbol`, `priority`, `opened`, `opened_days`, `claimed`, `age_days`, `summary`, `disposition`, `note_path`, `note_exists`, `note_preview`, `note_preview_truncated`.
 
-`claimed`, `age_days`, `note_preview`, and `note_preview_truncated` are omitted when empty or not applicable.
+`todo detail --json --full` adds the complete note text in `note_body` and omits `note_preview` and `note_preview_truncated`. `--lines` is ignored when `--full` is set.
+
+`claimed`, `age_days`, `note_preview`, `note_preview_truncated`, and `note_body` are omitted when empty or not applicable.
 
 ## Development
 

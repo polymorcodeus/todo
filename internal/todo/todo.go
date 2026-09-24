@@ -991,6 +991,7 @@ type DetailOptions struct {
 	Ref      string
 	Lines    int  // max note lines to preview; <=0 means unlimited
 	NoNote   bool // skip note preview
+	Full     bool // return the complete note body instead of a preview
 }
 
 // DetailResult is the read-only result of Detail.
@@ -1001,6 +1002,7 @@ type DetailResult struct {
 	Disposition   Disposition // park, work-order, clear (no note), or float
 	NotePreview   string      // first Lines lines of the note, if any
 	NoteTruncated bool        // true when more lines exist beyond the preview
+	NoteBody      string      // full note body, when Full is requested
 }
 
 // Detail returns full information about a single task plus a preview of its
@@ -1038,12 +1040,20 @@ func Detail(opts DetailOptions) (DetailResult, error) {
 	}
 
 	if !opts.NoNote && exists {
-		preview, truncated, err := readNotePreview(notePath, opts.Lines)
-		if err != nil {
-			return DetailResult{}, fmt.Errorf("read note: %w", err)
+		if opts.Full {
+			body, err := readNoteFull(notePath)
+			if err != nil {
+				return DetailResult{}, fmt.Errorf("read note: %w", err)
+			}
+			res.NoteBody = body
+		} else {
+			preview, truncated, err := readNotePreview(notePath, opts.Lines)
+			if err != nil {
+				return DetailResult{}, fmt.Errorf("read note: %w", err)
+			}
+			res.NotePreview = preview
+			res.NoteTruncated = truncated
 		}
-		res.NotePreview = preview
-		res.NoteTruncated = truncated
 	}
 
 	return res, nil
@@ -1086,4 +1096,14 @@ func readNotePreview(path string, lines int) (string, bool, error) {
 		}
 	}
 	return strings.Join(out, "\n"), false, nil
+}
+
+// readNoteFull returns the entire contents of the note file. It follows
+// symlinks so lnk-managed notes are read transparently.
+func readNoteFull(path string) (string, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
 }

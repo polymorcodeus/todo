@@ -501,6 +501,164 @@ func TestDetailJSONDisposition(t *testing.T) {
 	}
 }
 
+func TestDetailFullJSON(t *testing.T) {
+	setupGitRepo(t)
+
+	if _, _, err := runApp(t, []string{"init"}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	longBody := "line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\nline 8\nline 9\nline 10\nline 11\nline 12\nline 13\nline 14\nline 15\nline 16\nline 17\nline 18\nline 19\nline 20\nline 21"
+	if _, _, err := runApp(t, []string{"add", "-n", "--kind", "work-order", "--note-content", longBody, "full task"}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+
+	out, _, err := runApp(t, []string{"detail", "TSK-001", "--json"})
+	if err != nil {
+		t.Fatalf("detail --json: %v", err)
+	}
+
+	var detail jsonDetail
+	if err := json.Unmarshal([]byte(out), &detail); err != nil {
+		t.Fatalf("parse detail json: %v", err)
+	}
+	if !detail.NotePreviewTruncated {
+		t.Errorf("NotePreviewTruncated = false, want true")
+	}
+	if detail.NoteBody != "" {
+		t.Errorf("NoteBody = %q, want empty without --full", detail.NoteBody)
+	}
+
+	out, _, err = runApp(t, []string{"detail", "TSK-001", "--json", "--full"})
+	if err != nil {
+		t.Fatalf("detail --json --full: %v", err)
+	}
+
+	var fullDetail jsonDetail
+	if err := json.Unmarshal([]byte(out), &fullDetail); err != nil {
+		t.Fatalf("parse detail json: %v", err)
+	}
+	wantBody := "---\nkind: work-order\n---\n\n" + longBody
+	if fullDetail.NoteBody != wantBody {
+		t.Errorf("NoteBody = %q, want %q", fullDetail.NoteBody, wantBody)
+	}
+	if fullDetail.NotePreview != "" {
+		t.Errorf("NotePreview = %q, want empty with --full", fullDetail.NotePreview)
+	}
+	if fullDetail.NotePreviewTruncated {
+		t.Errorf("NotePreviewTruncated = true, want false with --full")
+	}
+}
+
+func TestDetailFullHuman(t *testing.T) {
+	setupGitRepo(t)
+
+	if _, _, err := runApp(t, []string{"init"}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if _, _, err := runApp(t, []string{"add", "-n", "--kind", "work-order", "--note-content", "line 1\nline 2\nline 3", "human full task"}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+
+	out, _, err := runApp(t, []string{"detail", "TSK-001", "--full"})
+	if err != nil {
+		t.Fatalf("detail --full: %v", err)
+	}
+	if !strings.Contains(out, "line 3") {
+		t.Errorf("human --full output missing line 3: %q", out)
+	}
+}
+
+func TestDetailFullNoNote(t *testing.T) {
+	setupGitRepo(t)
+
+	if _, _, err := runApp(t, []string{"init"}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if _, _, err := runApp(t, []string{"add", "no note task"}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+
+	out, _, err := runApp(t, []string{"detail", "TSK-001", "--json", "--full"})
+	if err != nil {
+		t.Fatalf("detail --json --full: %v", err)
+	}
+
+	var detail jsonDetail
+	if err := json.Unmarshal([]byte(out), &detail); err != nil {
+		t.Fatalf("parse detail json: %v", err)
+	}
+	if detail.NoteBody != "" {
+		t.Errorf("NoteBody = %q, want empty for task with no note", detail.NoteBody)
+	}
+	if detail.NoteExists {
+		t.Error("NoteExists = true, want false")
+	}
+}
+
+func TestDetailFullNoNoteFlag(t *testing.T) {
+	setupGitRepo(t)
+
+	if _, _, err := runApp(t, []string{"init"}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if _, _, err := runApp(t, []string{"add", "-n", "--kind", "work-order", "--note-content", "secret", "flag task"}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+
+	out, _, err := runApp(t, []string{"detail", "TSK-001", "--json", "--full", "--no-note"})
+	if err != nil {
+		t.Fatalf("detail --json --full --no-note: %v", err)
+	}
+
+	var detail jsonDetail
+	if err := json.Unmarshal([]byte(out), &detail); err != nil {
+		t.Fatalf("parse detail json: %v", err)
+	}
+	if detail.NoteBody != "" {
+		t.Errorf("NoteBody = %q, want empty with --no-note", detail.NoteBody)
+	}
+	if detail.NotePreview != "" {
+		t.Errorf("NotePreview = %q, want empty with --no-note", detail.NotePreview)
+	}
+}
+
+func TestDetailFullSymlink(t *testing.T) {
+	setupGitRepo(t)
+
+	if _, _, err := runApp(t, []string{"init"}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if _, _, err := runApp(t, []string{"add", "symlink task"}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+
+	noteDir := t.TempDir()
+	realNote := filepath.Join(noteDir, "TSK-001.md")
+	if err := os.WriteFile(realNote, []byte("line 1\nline 2\nline 3"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	symlink := filepath.Join(".todo", "notes", "TSK-001.md")
+	if err := os.MkdirAll(filepath.Dir(symlink), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realNote, symlink); err != nil {
+		t.Fatal(err)
+	}
+
+	out, _, err := runApp(t, []string{"detail", "TSK-001", "--json", "--full"})
+	if err != nil {
+		t.Fatalf("detail --json --full: %v", err)
+	}
+
+	var detail jsonDetail
+	if err := json.Unmarshal([]byte(out), &detail); err != nil {
+		t.Fatalf("parse detail json: %v", err)
+	}
+	if detail.NoteBody != "line 1\nline 2\nline 3" {
+		t.Errorf("NoteBody = %q, want symlink target content", detail.NoteBody)
+	}
+}
+
 func TestAddDispositionRequiresNote(t *testing.T) {
 	setupGitRepo(t)
 

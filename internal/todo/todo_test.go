@@ -1185,6 +1185,70 @@ func TestDetailDoesNotMutate(t *testing.T) {
 	}
 }
 
+func TestDetailFullNote(t *testing.T) {
+	todoPath, notesDir := writeTestTodo(t, sampleTasks)
+	if err := os.MkdirAll(notesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := "line 1\nline 2\nline 3\nline 4\nline 5"
+	notePath := filepath.Join(notesDir, "TSK-001.md")
+	if err := os.WriteFile(notePath, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := Detail(DetailOptions{TodoPath: todoPath, NotesDir: notesDir, Ref: "1", Full: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.NotePreview != "" {
+		t.Errorf("NotePreview = %q, want empty", res.NotePreview)
+	}
+	if res.NoteTruncated {
+		t.Error("NoteTruncated = true, want false")
+	}
+	if res.NoteBody != body {
+		t.Errorf("NoteBody = %q, want %q", res.NoteBody, body)
+	}
+}
+
+func TestDetailFullNoteTruncationStillWorks(t *testing.T) {
+	todoPath, notesDir := writeTestTodo(t, sampleTasks)
+	if err := os.MkdirAll(notesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := "line 1\nline 2\nline 3\nline 4\nline 5"
+	notePath := filepath.Join(notesDir, "TSK-001.md")
+	if err := os.WriteFile(notePath, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := Detail(DetailOptions{TodoPath: todoPath, NotesDir: notesDir, Ref: "1", Lines: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.NoteTruncated {
+		t.Error("NoteTruncated = false, want true")
+	}
+	if res.NotePreview != "line 1\nline 2\nline 3" {
+		t.Errorf("NotePreview = %q, want truncated preview", res.NotePreview)
+	}
+}
+
+func TestDetailFullNoNote(t *testing.T) {
+	todoPath, notesDir := writeTestTodo(t, sampleTasks)
+
+	res, err := Detail(DetailOptions{TodoPath: todoPath, NotesDir: notesDir, Ref: "1", Full: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.NoteBody != "" {
+		t.Errorf("NoteBody = %q, want empty", res.NoteBody)
+	}
+	if res.NoteExists {
+		t.Error("NoteExists = true, want false")
+	}
+}
+
 func TestRemoveWithNoteDelete(t *testing.T) {
 	todoPath, notesDir := writeTestTodo(t, sampleTasks)
 	if err := os.MkdirAll(notesDir, 0o755); err != nil {
