@@ -329,6 +329,7 @@ type detailOptions struct {
 	lines  int
 	noNote bool
 	asJSON bool
+	full   bool
 }
 
 // jsonDetail is the machine-readable representation of a task detail.
@@ -347,6 +348,7 @@ type jsonDetail struct {
 	NoteExists           bool   `json:"note_exists"`
 	NotePreview          string `json:"note_preview,omitempty"`
 	NotePreviewTruncated bool   `json:"note_preview_truncated,omitempty"`
+	NoteBody             string `json:"note_body,omitempty"`
 }
 
 func runDetail(cmd *cli.Command, cfg appConfig, opts detailOptions) error {
@@ -366,6 +368,7 @@ func runDetail(cmd *cli.Command, cfg appConfig, opts detailOptions) error {
 		Ref:      ref,
 		Lines:    lines,
 		NoNote:   opts.noNote,
+		Full:     opts.full,
 	})
 	if err != nil {
 		return exitError(err)
@@ -387,7 +390,9 @@ func runDetail(cmd *cli.Command, cfg appConfig, opts detailOptions) error {
 			NoteExists:   res.NoteExists,
 			NotePreview:  res.NotePreview,
 		}
-		if res.NotePreview != "" {
+		if opts.full && !opts.noNote {
+			jd.NoteBody = res.NoteBody
+		} else if res.NotePreview != "" {
 			jd.NotePreviewTruncated = res.NoteTruncated
 		}
 		if age := res.Task.AgeDays(); age >= 0 {
@@ -417,7 +422,11 @@ func runDetail(cmd *cli.Command, cfg appConfig, opts detailOptions) error {
 
 	if res.NoteExists {
 		_, _ = fmt.Fprintf(out, "note: %s\n", res.NotePath)
-		if res.NotePreview != "" {
+		if opts.full && res.NoteBody != "" {
+			for i, line := range strings.Split(res.NoteBody, "\n") {
+				_, _ = fmt.Fprintf(out, "  %2d | %s\n", i+1, line)
+			}
+		} else if res.NotePreview != "" {
 			for i, line := range strings.Split(res.NotePreview, "\n") {
 				_, _ = fmt.Fprintf(out, "  %2d | %s\n", i+1, line)
 			}

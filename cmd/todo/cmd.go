@@ -332,6 +332,7 @@ func newApp() *cli.Command {
 					lines  int
 					noNote bool
 					asJSON bool
+					full   bool
 				)
 				return &cli.Command{
 					Name:      "detail",
@@ -354,6 +355,11 @@ func newApp() *cli.Command {
 							Destination: &asJSON,
 							Usage:       "output machine-readable JSON",
 						},
+						&cli.BoolFlag{
+							Name:        "full",
+							Destination: &full,
+							Usage:       "show the full note body instead of a preview (--lines is ignored)",
+						},
 					},
 					Action: func(ctx context.Context, cmd *cli.Command) error {
 						cfg, err := requireRepoConfig()
@@ -364,6 +370,7 @@ func newApp() *cli.Command {
 							lines:  lines,
 							noNote: noNote,
 							asJSON: asJSON,
+							full:   full,
 						})
 					},
 				}
