@@ -8,8 +8,6 @@ import (
 	"os"
 	"slices"
 	"strings"
-
-	"github.com/polymorcodeus/park/schema"
 )
 
 // Disposition classifies a task's companion note by its frontmatter so
@@ -21,9 +19,11 @@ const (
 	DispositionPark Disposition = "park"
 	// DispositionWorkOrder marks a disposable note stamped kind: work-order.
 	DispositionWorkOrder Disposition = "work-order"
+	// DispositionRecord marks a durable todo-native note stamped kind: record.
+	DispositionRecord Disposition = "record"
 	// DispositionFloat marks a note with no recognized disposition.
 	DispositionFloat Disposition = "float"
-	// DispositionClear marks a task with no companion note — the task line
+	// DispositionClear marks a task with no companion note - the task line
 	// should be removed on clear with no note to preserve.
 	DispositionClear Disposition = "clear"
 )
@@ -32,10 +32,21 @@ const (
 // supplied. A todo note originates from the repo's task list.
 const defaultRecordSource = "repo"
 
+// parkCategories is the canonical parked-note category enum. It is duplicated
+// here rather than imported from park/schema so todo's note contract stands on
+// its own; a park-shaped record is emitted only for interop.
+var parkCategories = []string{"inbox", "projects", "areas", "archive"}
+
+// ParkCategories returns the canonical park category values, for CLI validation
+// and interop only. Todo's own durable notes are todo-native records.
+func ParkCategories() []string {
+	return slices.Clone(parkCategories)
+}
+
 // NoteDisposition reads the leading frontmatter block of a note and classifies
-// it: park when a category field is present, work-order when a kind: work-order
-// marker is present, and float when neither is found. A note without any
-// frontmatter block is float, never an error.
+// it: work-order when a kind: work-order marker is present, park when a category
+// field is present, record when kind: record is present, and float when none is
+// found. A note without any frontmatter block is float, never an error.
 func NoteDisposition(path string) (Disposition, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -44,7 +55,7 @@ func NoteDisposition(path string) (Disposition, error) {
 	//nolint:errcheck // read-only file; close error not meaningful here
 	defer f.Close()
 
-	var hasCategory, hasWorkOrder bool
+	var hasCategory, hasWorkOrder, hasRecord bool
 	scanner := bufio.NewScanner(f)
 	if scanner.Scan() && strings.TrimSpace(scanner.Text()) == "---" {
 		for scanner.Scan() {
@@ -60,8 +71,11 @@ func NoteDisposition(path string) (Disposition, error) {
 			case "category":
 				hasCategory = true
 			case "kind":
-				if strings.TrimSpace(val) == "work-order" {
+				switch strings.TrimSpace(val) {
+				case "work-order":
 					hasWorkOrder = true
+				case "record":
+					hasRecord = true
 				}
 			}
 		}
@@ -70,19 +84,23 @@ func NoteDisposition(path string) (Disposition, error) {
 		return "", err
 	}
 
+	if hasWorkOrder {
+		return DispositionWorkOrder, nil
+	}
 	if hasCategory {
 		return DispositionPark, nil
 	}
-	if hasWorkOrder {
-		return DispositionWorkOrder, nil
+	if hasRecord {
+		return DispositionRecord, nil
 	}
 	return DispositionFloat, nil
 }
 
 // buildNoteContent prefixes body with the note's disposition frontmatter.
-// kind "work-order" stamps the disposable marker; otherwise a park record
-// frontmatter is stamped, defaulting category to areas and synopsis/source to
-// the task summary and the repo, respectively. created is the note's write date.
+// kind "work-order" stamps the disposable marker; a category stamps a
+// park-shaped record for interop; otherwise a todo-native record is stamped,
+// defaulting synopsis to the task summary and source to the repo. created is
+// the note's write date.
 func buildNoteContent(body, kind, category, synopsis, source, fallbackSynopsis, created string) (string, error) {
 	if kind != "" {
 		if kind != "work-order" {
@@ -91,11 +109,6 @@ func buildNoteContent(body, kind, category, synopsis, source, fallbackSynopsis, 
 		return "---\nkind: work-order\n---\n\n" + body, nil
 	}
 
-	if category == "" {
-		category = string(schema.CategoryAreas)
-	} else if !isCategory(category) {
-		return "", fmt.Errorf("invalid category %q: want one of %s", category, strings.Join(schema.Categories(), ", "))
-	}
 	if synopsis == "" {
 		synopsis = fallbackSynopsis
 	}
@@ -103,15 +116,70 @@ func buildNoteContent(body, kind, category, synopsis, source, fallbackSynopsis, 
 		source = defaultRecordSource
 	}
 
-	return schema.Render(schema.Frontmatter{
-		Category: category,
-		Created:  created,
-		Source:   source,
-		Synopsis: synopsis,
-	}, body), nil
+	if category != "" {
+		if !isParkCategory(category) {
+			return "", fmt.Errorf("invalid category %q: want one of %s", category, strings.Join(parkCategories, ", "))
+		}
+		return renderParkRecord(category, created, source, synopsis, body), nil
+	}
+
+	return renderRecord(created, source, synopsis, body), nil
 }
 
-// isCategory reports whether s is a canonical park category.
-func isCategory(s string) bool {
-	return slices.Contains(schema.Categories(), s)
+// renderParkRecord emits park's four-key frontmatter block for interop. It
+// matches park/schema's WriteTemplate byte for byte.
+func renderParkRecord(category, created, source, synopsis, body string) string {
+	return "---\ncategory: " + category + "\ncreated: " + created +
+		"\nsource: " + source + "\nsynopsis: " + synopsis + "\n---\n\n" + body + "\n"
+}
+
+// renderRecord emits the todo-native durable-note frontmatter block.
+func renderRecord(created, source, synopsis, body string) string {
+	return "---\nkind: record\ncreated: " + created +
+		"\nsource: " + source + "\nsynopsis: " + synopsis + "\n---\n\n" + body + "\n"
+}
+
+// isParkCategory reports whether s is a canonical park category.
+func isParkCategory(s string) bool {
+	return slices.Contains(parkCategories, s)
+}
+
+// noteFields holds the frontmatter values the archive path needs from an
+// existing note, plus its body.
+type noteFields struct {
+	created  string
+	source   string
+	synopsis string
+	body     string
+}
+
+// parseNoteFields splits a note into its recognized frontmatter values and its
+// body. A note without a frontmatter block yields only a body.
+func parseNoteFields(content string) noteFields {
+	nf := noteFields{body: content}
+	if !strings.HasPrefix(content, "---\n") {
+		return nf
+	}
+	rest := content[len("---\n"):]
+	before, after, ok := strings.Cut(rest, "\n---\n")
+	if !ok {
+		nf.body = ""
+		return nf
+	}
+	for line := range strings.SplitSeq(before, "\n") {
+		key, val, ok := strings.Cut(line, ":")
+		if !ok {
+			continue
+		}
+		switch strings.TrimSpace(key) {
+		case "created":
+			nf.created = strings.TrimSpace(val)
+		case "source":
+			nf.source = strings.TrimSpace(val)
+		case "synopsis":
+			nf.synopsis = strings.TrimSpace(val)
+		}
+	}
+	nf.body = strings.TrimPrefix(after, "\n")
+	return nf
 }

@@ -197,9 +197,9 @@ type AddOptions struct {
 	DryRun      bool   // preview what would be written without persisting
 
 	// Note disposition flags. Kind "work-order" stamps a disposable marker;
-	// Category/Synopsis/Source stamp park record frontmatter (the default when
-	// no disposition flags are given). These are ignored when CreateNote is
-	// false.
+	// Synopsis/Source stamp a todo-native record (the default when no
+	// disposition flags are given); Category additionally stamps a park-shaped
+	// record for interop. These are ignored when CreateNote is false.
 	Kind     string
 	Category string
 	Synopsis string
@@ -502,12 +502,160 @@ func Remove(opts RefOptions) (Result, error) {
 	return Result{Line: line, Note: note}, nil
 }
 
+// ArchiveOptions configures Archive.
+type ArchiveOptions struct {
+	TodoPath   string
+	NotesDir   string
+	ArchiveDir string
+	Ref        string
+	Name       string // archived note basename; default "<ID>.md"
+	Synopsis   string // asserted relevance why; empty means the note's existing synopsis
+}
+
+// ArchiveResult describes the outcome of Archive.
+type ArchiveResult struct {
+	ID          string
+	Line        string // the removed task line, unchanged
+	NotePath    string // the source companion note path
+	ArchivePath string
+	Synopsis    string
+}
+
+// Archive retires a completed task: it moves the task's companion note into
+// .todo/archive and removes the task line. The task must be done [x] and must
+// have a companion note. The archived synopsis is asserted here: it defaults to
+// the note's existing synopsis and is overridden by opts.Synopsis; an empty
+// result is an error, never a silently unlabeled archive entry. Creation of the
+// archive directory and its first file happen in one pass so the directory is
+// never left empty between writes.
+func Archive(opts ArchiveOptions) (ArchiveResult, error) {
+	tasks, h, err := parseTodoFile(opts.TodoPath)
+	if err != nil {
+		return ArchiveResult{}, fmt.Errorf("read todo file: %w", err)
+	}
+
+	idx, err := findTaskIndex(tasks, opts.Ref)
+	if err != nil {
+		return ArchiveResult{}, err
+	}
+	task := tasks[idx]
+	if task.Status != StatusDone {
+		return ArchiveResult{}, fmt.Errorf("cannot archive %s: task is %s (only done tasks can be archived)", task.ID, describeStatus(task.Status))
+	}
+
+	notePath, exists := NotePath(opts.NotesDir, task.ID)
+	if !exists {
+		return ArchiveResult{}, fmt.Errorf("cannot archive %s: no companion note to retire", task.ID)
+	}
+	content, err := readNoteFull(notePath)
+	if err != nil {
+		return ArchiveResult{}, fmt.Errorf("read note: %w", err)
+	}
+
+	fields := parseNoteFields(content)
+	synopsis := opts.Synopsis
+	if strings.TrimSpace(synopsis) == "" {
+		synopsis = fields.synopsis
+	}
+	if strings.TrimSpace(synopsis) == "" {
+		return ArchiveResult{}, fmt.Errorf("cannot archive %s: a synopsis is required (pass --synopsis)", task.ID)
+	}
+	created := fields.created
+	if created == "" {
+		created = now().Format("2006-01-02")
+	}
+	source := fields.source
+	if source == "" {
+		source = defaultRecordSource
+	}
+
+	name := opts.Name
+	if name == "" {
+		name = task.ID
+	}
+	name = filepath.Base(name)
+	if !strings.HasSuffix(name, ".md") {
+		name += ".md"
+	}
+	archivePath := filepath.Join(opts.ArchiveDir, name)
+	if _, err := os.Stat(archivePath); err == nil {
+		return ArchiveResult{}, fmt.Errorf("archive note already exists: %s", archivePath)
+	}
+
+	archived := renderRecord(created, source, synopsis, strings.TrimSuffix(fields.body, "\n"))
+
+	if err := os.MkdirAll(opts.ArchiveDir, 0o755); err != nil {
+		return ArchiveResult{}, fmt.Errorf("create archive dir: %w", err)
+	}
+	if err := os.WriteFile(archivePath, []byte(archived), 0o644); err != nil {
+		return ArchiveResult{}, fmt.Errorf("write archive note: %w", err)
+	}
+
+	line := task.String()
+	h.lastUpdated = now().Format("2006-01-02T15:04")
+	remaining := append(tasks[:idx], tasks[idx+1:]...)
+	if err := writeTodoFile(opts.TodoPath, h, remaining); err != nil {
+		return ArchiveResult{}, fmt.Errorf("write todo file: %w", err)
+	}
+
+	if err := os.Remove(notePath); err != nil {
+		return ArchiveResult{}, fmt.Errorf("remove source note: %w", err)
+	}
+
+	return ArchiveResult{
+		ID:          task.ID,
+		Line:        line,
+		NotePath:    notePath,
+		ArchivePath: archivePath,
+		Synopsis:    synopsis,
+	}, nil
+}
+
+// ArchivedNote is one entry in a repo's .todo/archive.
+type ArchivedNote struct {
+	Name     string // file basename
+	Path     string
+	Synopsis string
+}
+
+// ListArchived returns the archived notes in archiveDir, sorted by filename. A
+// missing directory is not an error: it means nothing has been archived yet.
+func ListArchived(archiveDir string) ([]ArchivedNote, error) {
+	entries, err := os.ReadDir(archiveDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read archive dir: %w", err)
+	}
+
+	notes := make([]ArchivedNote, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+			continue
+		}
+		path := filepath.Join(archiveDir, e.Name())
+		content, err := readNoteFull(path)
+		if err != nil {
+			return nil, fmt.Errorf("read archived note %s: %w", e.Name(), err)
+		}
+		notes = append(notes, ArchivedNote{
+			Name:     e.Name(),
+			Path:     path,
+			Synopsis: parseNoteFields(content).synopsis,
+		})
+	}
+	sort.Slice(notes, func(i, j int) bool { return notes[i].Name < notes[j].Name })
+	return notes, nil
+}
+
 // ClearResult describes the outcome of clearing completed tasks from a single
 // repo based on their companion-note disposition.
 type ClearResult struct {
 	RemovedClear     []string // completed IDs removed because no companion note existed
 	RemovedWorkOrder []string // IDs removed and whose notes were deleted
 	Parked           []string // IDs removed but whose park notes were kept
+	Recorded         []string // IDs removed but whose todo-native record notes were kept
 	Float            []string // completed IDs left in the file for review
 }
 
@@ -515,6 +663,7 @@ type ClearResult struct {
 //   - no note: delete the task line (nothing to preserve or delete).
 //   - work-order: delete the task line and its disposable note.
 //   - park: delete the task line but preserve the park record note.
+//   - record: delete the task line but preserve the todo-native record note.
 //   - float (a note exists but has no recognized disposition, or cannot be
 //     read at all): leave the task line for manual review.
 func Clear(todoPath, notesDir string) (ClearResult, error) {
@@ -558,6 +707,9 @@ func Clear(todoPath, notesDir string) (ClearResult, error) {
 			wrote = true
 		case DispositionPark:
 			result.Parked = append(result.Parked, t.ID)
+			wrote = true
+		case DispositionRecord:
+			result.Recorded = append(result.Recorded, t.ID)
 			wrote = true
 		default:
 			remaining = append(remaining, t)
@@ -999,7 +1151,7 @@ type DetailResult struct {
 	Task          Task
 	NotePath      string
 	NoteExists    bool
-	Disposition   Disposition // park, work-order, clear (no note), or float
+	Disposition   Disposition // park, record, work-order, clear (no note), or float
 	NotePreview   string      // first Lines lines of the note, if any
 	NoteTruncated bool        // true when more lines exist beyond the preview
 	NoteBody      string      // full note body, when Full is requested

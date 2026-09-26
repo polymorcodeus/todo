@@ -12,7 +12,7 @@
 
 Part of the [polymorcodeus](https://github.com/polymorcodeus) suite of CLI tooling for dotfile and knowledge management.
 
-Manage an ad-hoc task list in a plain Markdown file, `.todo/todo.md`, stored in the root of a git repo. Designed for agents and scripts: everything is a version-controllable text file, with optional companion notes. Every read command has a `--json` mode, task IDs are never recycled, and companion notes at `.todo/notes/<ID>.md` carry the full brief for a task.
+Manage an ad-hoc task list in a plain Markdown file, `.todo/todo.md`, stored in the root of a git repo. Designed for agents and scripts: everything is a version-controllable text file, with optional companion notes. Every read command has a `--json` mode, task IDs are never recycled, companion notes at `.todo/notes/<ID>.md` carry the full brief for a task, and retired whys live in the repo-local `.todo/archive/`.
 
 ## Install
 
@@ -54,9 +54,13 @@ echo "body" | todo add -n "task"            # ...or read note content from stdin
 todo add --note-file ./draft.md "task"      # ...or copy an existing file (not move; no -n needed)
 todo add --dry-run -s "x" --note-content "y" # preview the would-be line + note, no write
 todo add -n --kind work-order "task"        # note is a disposable work order
-todo add -n --category areas --synopsis "one line" --source repo "task"  # note is a park record
+todo add -n --synopsis "one line" "task"    # note is a todo-native record (default when -n is given)
+todo add -n --category areas --synopsis "one line" --source repo "task"  # note is a park record (interop)
 todo add "an over-long summary (over 120 chars) ..."                    # long summaries truncate on the line and spill into a work-order note
 todo list                                   # list tasks (alias: todo ls)
+todo list --archive                         # compact view of retired notes in .todo/archive
+todo list --archive --all                   # ...across all registered repos
+todo list --archive --json                  # machine-readable archived-note listing
 todo list --state open                      # filter by status: open|progress|done
 todo list --stale 5                         # only claimed tasks older than 5 day/s
 todo list --sort priority                   # sort by priority, opened, claimed, or age
@@ -80,6 +84,9 @@ todo release TSK-001                        # release a picked-up task back to o
 todo complete TSK-001                       # mark a task done (drops claimed)
 todo complete --clear TSK-001               # remove the task line entirely
 todo complete --park TSK-001                # done + print the companion note path
+todo archive TSK-001                        # retire a done task: move its note to .todo/archive, remove its line
+todo archive TSK-001 --synopsis "the why"   # assert/rewrite the archived one-line relevance why
+todo archive TSK-001 --name retry-loop      # name the archived note retry-loop.md (default: <ID>.md)
 todo clear                                  # bulk-clear completed tasks by note disposition
 todo clear --all                            # ...across all registered repos
 todo remove TSK-001                         # remove a task line by ref (any status, e.g. [x])
@@ -98,6 +105,7 @@ State rules:
 - `release` also only works on an in-progress `[o]` task; it returns it to `[ ]` and drops the claim.
 - `remove` works on any status line (including `[x]` done lines) and deletes it; `--note` also deletes the companion note file. When that note is a symlink, the target it points at is deleted first and the link after, so lnk-managed notes leave neither an orphaned target nor a dangling link.
 - `reopen` works on a completed `[x]` task and restores it to `[ ]`; it is a no-op if the task is already open.
+- `archive` works on a completed `[x]` task that has a companion note. It asserts the note's one-line relevance why (the note's existing `synopsis`, overridable with `--synopsis`; an empty result is an error), writes the note into `.todo/archive/`, removes the task line, and removes the source note entry.
 - `bump` works on any task regardless of status; it cycles priority up (`low->med->high->no-op`) or down (`high->med->low->no-op`) via `--down`. No-op at boundaries writes nothing.
 - `pickup` records the `claimed:` date; `complete`/`release`/`reopen` drop it.
 
@@ -119,7 +127,7 @@ next_id: TSK-005
 - [x] [TSK-003][priority:low][opened:2026-08-03] write docs
 ```
 
-Status is `[ ]` open, `[o]` in progress, `[x]` done. `claimed:` records when a task was picked up (present only on in-progress tasks). Optional companion notes live at `.todo/notes/<ID>.md`.
+Status is `[ ]` open, `[o]` in progress, `[x]` done. `claimed:` records when a task was picked up (present only on in-progress tasks). Optional companion notes live at `.todo/notes/<ID>.md`; retired whys live at `.todo/archive/` (see Archive below).
 
 `next_id:` is a monotonic high-water mark: `add` never reuses it, so removing all tasks still lets new tasks resume at the next ID rather than restarting at TSK-001. It is backfilled automatically on any write, so files created before this field existed converge without manual action.
 
@@ -129,23 +137,38 @@ Every `todo init` registers the repo in a machine-local JSON cache at `$XDG_CACH
 
 ## Note disposition
 
-Every companion note carries a write-time disposition in its frontmatter so clear-time tooling knows whether to preserve, delete, or float it:
+Every companion note carries a write-time disposition in its frontmatter so clear-time tooling knows whether to preserve, delete, or float it. Todo defines its own note contract and does not import park's schema; a park-shaped record is emitted only for interop.
 
-- **record** (default): park-native frontmatter with `category`, `created`, `source`, and `synopsis`. Stamped by `--category`/`--synopsis`/`--source`; without any disposition flags it defaults to `category: areas` so notes are never silently dropped.
-- **work order**: `kind: work-order`, stamped by `--kind work-order`.
+- **record** (default): todo-native frontmatter with `kind: record`, `created`, `source`, and `synopsis`. Stamped whenever `-n` creates a note without a `--kind` or `--category` flag; `synopsis` defaults to the task summary and `source` to `repo`.
+- **work order**: `kind: work-order`, stamped by `--kind work-order`. Disposable.
+- **park**: park-native frontmatter with `category`, `created`, `source`, and `synopsis`, stamped by `--category` (interop with the park store). Recognized by the mere presence of `category:`.
 
 `todo clear` bulk-removes completed `[x]` tasks based on that disposition:
 
 - no note file: remove the task line (nothing to preserve or delete).
 - `work-order`: remove the task line and delete the disposable note (symlink-aware, exactly like `remove --note`).
 - `park`: remove the task line but keep the park record note.
+- `record`: remove the task line but keep the todo-native record note (retire it with `todo archive` to move it into `.todo/archive/`).
 - `float` (note exists with no recognized disposition, or the note cannot be read): leave the task line and list it for review. Only a genuinely missing note file counts as "no note", so an unreadable note is never discarded by accident.
 
 `todo clear --all` applies the same rules across every registered repo. The registry is updated by `todo init` and reconciled with `todo doctor`.
 
-Summaries longer than 120 characters are truncated on the task line (with a trailing `...`) and spilled into a `kind: work-order` note so the full text is preserved. When no note is requested, that note is created automatically.
+Summaries longer than 120 characters are truncated on the task line (with a trailing `...`) and spilled into a `kind: work-order` note so the full text is preserved. When no note is requested, that note is created automatically. Park records are exempt: their `synopsis` carries the full summary.
 
-`todo detail --json` exposes the derived `disposition` field: `park` (has `category`), `work-order` (has `kind: work-order`), `clear` (no note), or `float` (note exists, neither marker). `todo detail` itself reports an unreadable note as an error rather than a disposition.
+`todo detail --json` exposes the derived `disposition` field: `park` (has `category`), `record` (has `kind: record`), `work-order` (has `kind: work-order`), `clear` (no note), or `float` (note exists, none of the markers). `todo detail` itself reports an unreadable note as an error rather than a disposition.
+
+## Archive
+
+`.todo/archive/` is the repo-local home for retired whys: the reasoning behind work that is done, kept where the work happened so a "how did we fix this before" search lands in the right repo. Retire a completed task with `todo archive <ref>`:
+
+- the task must be `[x]` and must have a companion note;
+- the note's one-line relevance why (`synopsis`) is asserted at archive time. It defaults to the note's existing synopsis; `--synopsis` sets or rewrites it, and an empty result is an error, never a silently unlabeled entry;
+- the note is rewritten as a todo-native record and moved to `.todo/archive/<ID>.md` (`--name` overrides the basename);
+- the task line and the source note entry are removed.
+
+The archived note's `synopsis` is the field a non-author reads, so it is the one field with a standing maintenance duty: review it as the cleanup surface. `todo list` never shows archived content; `todo list --archive` is the compact view, and `todo list --archive --json` emits a versioned `{schema_version, archived[]}` envelope.
+
+Work orders stay disposable: `clear` deletes them. When a completed work order changed behavior, run `todo archive` first so its why survives.
 
 ## JSON output
 
@@ -154,7 +177,9 @@ Both `todo list --json` and `todo detail --json` emit stable, machine-readable J
 - `status`: canonical status designation (`open`, `in progress`, `complete`)
 - `status_symbol`: raw checkbox character (` `, `o`, `x`)
 
-`todo list --json` returns an array of tasks with fields: `id`, `status`, `status_symbol`, `priority`, `opened`, `claimed`, `age_days`, `summary`, and `disposition` (`park`, `work-order`, `clear`, or `float`). When using `todo list --all --json`, each task also includes `repo_path` and `repo_project`.
+`todo list --json` returns an array of tasks with fields: `id`, `status`, `status_symbol`, `priority`, `opened`, `claimed`, `age_days`, `summary`, and `disposition` (`park`, `record`, `work-order`, `clear`, or `float`). When using `todo list --all --json`, each task also includes `repo_path` and `repo_project`.
+
+`todo list --archive --json` returns `{schema_version, archived[]}`, where each archived note has `name`, `path`, and `synopsis` (plus `repo_path`/`repo_project` with `--all`).
 
 `todo detail --json` returns a single object with fields: `id`, `status`, `status_symbol`, `priority`, `opened`, `opened_days`, `claimed`, `age_days`, `summary`, `disposition`, `note_path`, `note_exists`, `note_preview`, `note_preview_truncated`.
 

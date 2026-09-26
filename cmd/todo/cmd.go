@@ -8,13 +8,13 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/polymorcodeus/park/schema"
 	validation "github.com/urfave/cli-validation"
 	"github.com/urfave/cli/v3"
 
 	"github.com/polymorcodeus/todo/internal/fs"
 	"github.com/polymorcodeus/todo/internal/git"
 	"github.com/polymorcodeus/todo/internal/registry"
+	"github.com/polymorcodeus/todo/internal/todo"
 )
 
 var (
@@ -82,8 +82,8 @@ func newApp() *cli.Command {
 				categoryFlag := &cli.StringFlag{
 					Name:        "category",
 					Destination: &category,
-					Usage:       "park record category (" + strings.Join(schema.Categories(), ", ") + ")",
-					Validator:   validation.Enum(schema.Categories()...),
+					Usage:       "park record category (" + strings.Join(todo.ParkCategories(), ", ") + ")",
+					Validator:   validation.Enum(todo.ParkCategories()...),
 				}
 				synopsisFlag := &cli.StringFlag{
 					Name:        "synopsis",
@@ -185,6 +185,7 @@ func newApp() *cli.Command {
 					state       string
 					stale       int
 					all         bool
+					archive     bool
 					sort        string
 					sortReverse bool
 				)
@@ -202,6 +203,11 @@ func newApp() *cli.Command {
 							Name:        "all",
 							Destination: &all,
 							Usage:       "list tasks across all registered repos",
+						},
+						&cli.BoolFlag{
+							Name:        "archive",
+							Destination: &archive,
+							Usage:       "list archived notes instead of tasks (compact view)",
 						},
 						&cli.IntFlag{
 							Name:        "stale",
@@ -230,17 +236,24 @@ func newApp() *cli.Command {
 						opts := listOptions{
 							asJSON:      asJSON,
 							all:         all,
+							archive:     archive,
 							state:       state,
 							stale:       stale,
 							sort:        sort,
 							sortReverse: sortReverse,
 						}
 						if all {
+							if archive {
+								return runListArchived(cmd, appConfig{}, opts)
+							}
 							return runList(cmd, appConfig{}, opts)
 						}
 						cfg, err := requireRepoConfig()
 						if err != nil {
 							return exitError(err)
+						}
+						if archive {
+							return runListArchived(cmd, cfg, opts)
 						}
 						return runList(cmd, cfg, opts)
 					},
@@ -324,6 +337,36 @@ func newApp() *cli.Command {
 							return exitError(err)
 						}
 						return runRemove(cmd, cfg, removeOptions{deleteNote: deleteNote})
+					},
+				}
+			}(),
+			func() *cli.Command {
+				var (
+					name     string
+					synopsis string
+				)
+				return &cli.Command{
+					Name:      "archive",
+					Usage:     "retire a completed task into .todo/archive (move its note, remove its line)",
+					ArgsUsage: "<task>",
+					Flags: []cli.Flag{
+						&cli.StringFlag{
+							Name:        "name",
+							Destination: &name,
+							Usage:       "archived note basename (default <ID>.md)",
+						},
+						&cli.StringFlag{
+							Name:        "synopsis",
+							Destination: &synopsis,
+							Usage:       "assert the archived one-line relevance why (defaults to the note's synopsis)",
+						},
+					},
+					Action: func(ctx context.Context, cmd *cli.Command) error {
+						cfg, err := requireRepoConfig()
+						if err != nil {
+							return exitError(err)
+						}
+						return runArchive(cmd, cfg, archiveOptions{name: name, synopsis: synopsis})
 					},
 				}
 			}(),
@@ -505,9 +548,10 @@ func appConfigFor(repoRoot string) appConfig {
 		repoRoot = r
 	}
 	return appConfig{
-		repoRoot: repoRoot,
-		todoPath: filepath.Join(repoRoot, ".todo", "todo.md"),
-		notesDir: filepath.Join(repoRoot, ".todo", "notes"),
+		repoRoot:   repoRoot,
+		todoPath:   filepath.Join(repoRoot, ".todo", "todo.md"),
+		notesDir:   filepath.Join(repoRoot, ".todo", "notes"),
+		archiveDir: filepath.Join(repoRoot, ".todo", "archive"),
 	}
 }
 
