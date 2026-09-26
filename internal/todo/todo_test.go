@@ -560,7 +560,7 @@ func TestAddDryRun(t *testing.T) {
 	if want := filepath.Join(notesDir, "TSK-001.md"); result.NotePath != want {
 		t.Errorf("dry run note path = %q, want %q", result.NotePath, want)
 	}
-	wantContent := "---\ncategory: areas\ncreated: 2026-08-18\nsource: repo\nsynopsis: x\n---\n\nnote body\n"
+	wantContent := "---\nkind: record\ncreated: 2026-08-18\nsource: repo\nsynopsis: x\n---\n\nnote body\n"
 	if result.NoteContent != wantContent {
 		t.Errorf("dry run note content = %q, want %q", result.NoteContent, wantContent)
 	}
@@ -599,7 +599,7 @@ func TestAddNoteContent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "---\ncategory: areas\ncreated: 2026-08-18\nsource: repo\nsynopsis: with note\n---\n\nhello\nworld\n"
+	want := "---\nkind: record\ncreated: 2026-08-18\nsource: repo\nsynopsis: with note\n---\n\nhello\nworld\n"
 	if string(data) != want {
 		t.Errorf("note content = %q, want %q", string(data), want)
 	}
@@ -631,7 +631,7 @@ func TestAddNoteFileCopy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "---\ncategory: areas\ncreated: 2026-08-18\nsource: repo\nsynopsis: copy note\n---\n\nfrom file\n"
+	want := "---\nkind: record\ncreated: 2026-08-18\nsource: repo\nsynopsis: copy note\n---\n\nfrom file\n"
 	if string(data) != want {
 		t.Errorf("note content = %q, want %q", string(data), want)
 	}
@@ -1903,5 +1903,266 @@ func TestDetailDisposition(t *testing.T) {
 	}
 	if res.Disposition != DispositionFloat {
 		t.Errorf("TSK-003 disposition = %q, want float", res.Disposition)
+	}
+}
+
+func TestNoteDispositionRecord(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "TSK-001.md")
+	content := "---\nkind: record\ncreated: 2026-08-18\nsource: repo\nsynopsis: why\n---\n\nbody\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := NoteDisposition(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != DispositionRecord {
+		t.Errorf("disposition = %q, want record", got)
+	}
+}
+
+func TestClearRecordKeepsNote(t *testing.T) {
+	todoPath, notesDir := writeTestTodo(t, []Task{
+		{ID: "TSK-001", Priority: "med", Opened: "2026-08-01", Status: StatusDone, Summary: "record task"},
+	})
+	if err := os.MkdirAll(notesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	notePath := filepath.Join(notesDir, "TSK-001.md")
+	if err := os.WriteFile(notePath, []byte("---\nkind: record\ncreated: 2026-08-18\nsource: repo\nsynopsis: why\n---\n\nbody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := Clear(todoPath, notesDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Recorded) != 1 || res.Recorded[0] != "TSK-001" {
+		t.Errorf("recorded = %v, want [TSK-001]", res.Recorded)
+	}
+	if len(res.Parked) != 0 || len(res.Float) != 0 {
+		t.Errorf("parked = %v, float = %v, want none", res.Parked, res.Float)
+	}
+	if len(readTasks(t, todoPath)) != 0 {
+		t.Error("record task line not removed")
+	}
+	if _, err := os.Stat(notePath); err != nil {
+		t.Errorf("record note deleted: %v", err)
+	}
+}
+
+func TestArchive(t *testing.T) {
+	fixed := time.Date(2026, 9, 26, 10, 30, 0, 0, time.UTC)
+	setNow(func() time.Time { return fixed })
+	defer setNow(time.Now)
+
+	todoPath, notesDir := writeTestTodo(t, []Task{
+		{ID: "TSK-001", Priority: "high", Opened: "2026-08-01", Status: StatusDone, Summary: "retire me"},
+		{ID: "TSK-002", Priority: "low", Opened: "2026-08-02", Status: StatusOpen, Summary: "keep me"},
+	})
+	archiveDir := filepath.Join(filepath.Dir(notesDir), "archive")
+	if err := os.MkdirAll(notesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	notePath := filepath.Join(notesDir, "TSK-001.md")
+	note := "---\nkind: record\ncreated: 2026-08-01\nsource: repo\nsynopsis: the original why\n---\n\n# body\ndetails\n"
+	if err := os.WriteFile(notePath, []byte(note), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := Archive(ArchiveOptions{
+		TodoPath:   todoPath,
+		NotesDir:   notesDir,
+		ArchiveDir: archiveDir,
+		Ref:        "1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ID != "TSK-001" {
+		t.Errorf("id = %q, want TSK-001", res.ID)
+	}
+	if res.Synopsis != "the original why" {
+		t.Errorf("synopsis = %q, want the note's own", res.Synopsis)
+	}
+	wantPath := filepath.Join(archiveDir, "TSK-001.md")
+	if res.ArchivePath != wantPath {
+		t.Errorf("archive path = %q, want %q", res.ArchivePath, wantPath)
+	}
+
+	data, err := os.ReadFile(wantPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "---\nkind: record\ncreated: 2026-08-01\nsource: repo\nsynopsis: the original why\n---\n\n# body\ndetails\n"
+	if string(data) != want {
+		t.Errorf("archived content = %q, want %q", string(data), want)
+	}
+
+	// The line and the source note entry are gone; the other task survives.
+	tasks := readTasks(t, todoPath)
+	if len(tasks) != 1 || tasks[0].ID != "TSK-002" {
+		t.Errorf("remaining tasks = %v, want [TSK-002]", tasks)
+	}
+	if _, err := os.Stat(notePath); !os.IsNotExist(err) {
+		t.Errorf("source note still present: %v", err)
+	}
+}
+
+func TestArchiveSynopsisOverrideAndName(t *testing.T) {
+	fixed := time.Date(2026, 9, 26, 10, 30, 0, 0, time.UTC)
+	setNow(func() time.Time { return fixed })
+	defer setNow(time.Now)
+
+	todoPath, notesDir := writeTestTodo(t, []Task{
+		{ID: "TSK-001", Priority: "med", Opened: "2026-08-01", Status: StatusDone, Summary: "retire me"},
+	})
+	archiveDir := filepath.Join(filepath.Dir(notesDir), "archive")
+	if err := os.MkdirAll(notesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(notesDir, "TSK-001.md"), []byte("plain body"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := Archive(ArchiveOptions{
+		TodoPath:   todoPath,
+		NotesDir:   notesDir,
+		ArchiveDir: archiveDir,
+		Ref:        "TSK-001",
+		Name:       "retired-why",
+		Synopsis:   "asserted why",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Synopsis != "asserted why" {
+		t.Errorf("synopsis = %q, want asserted why", res.Synopsis)
+	}
+	wantPath := filepath.Join(archiveDir, "retired-why.md")
+	if res.ArchivePath != wantPath {
+		t.Errorf("archive path = %q, want %q", res.ArchivePath, wantPath)
+	}
+	data, err := os.ReadFile(wantPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "---\nkind: record\ncreated: 2026-09-26\nsource: repo\nsynopsis: asserted why\n---\n\nplain body\n"
+	if string(data) != want {
+		t.Errorf("archived content = %q, want %q", string(data), want)
+	}
+}
+
+func TestArchiveGuards(t *testing.T) {
+	archiveDirOf := func(notesDir string) string {
+		return filepath.Join(filepath.Dir(notesDir), "archive")
+	}
+
+	t.Run("not done", func(t *testing.T) {
+		todoPath, notesDir := writeTestTodo(t, []Task{
+			{ID: "TSK-001", Priority: "med", Opened: "2026-08-01", Status: StatusInProgress, Summary: "open"},
+		})
+		if _, err := Archive(ArchiveOptions{TodoPath: todoPath, NotesDir: notesDir, ArchiveDir: archiveDirOf(notesDir), Ref: "1"}); err == nil {
+			t.Fatal("archive of a non-done task: expected error")
+		}
+		if len(readTasks(t, todoPath)) != 1 {
+			t.Error("guard mutated the task list")
+		}
+	})
+
+	t.Run("no note", func(t *testing.T) {
+		todoPath, notesDir := writeTestTodo(t, []Task{
+			{ID: "TSK-001", Priority: "med", Opened: "2026-08-01", Status: StatusDone, Summary: "done"},
+		})
+		if _, err := Archive(ArchiveOptions{TodoPath: todoPath, NotesDir: notesDir, ArchiveDir: archiveDirOf(notesDir), Ref: "1"}); err == nil {
+			t.Fatal("archive without a note: expected error")
+		}
+		if len(readTasks(t, todoPath)) != 1 {
+			t.Error("guard mutated the task list")
+		}
+	})
+
+	t.Run("synopsis required", func(t *testing.T) {
+		fixed := time.Date(2026, 9, 26, 10, 30, 0, 0, time.UTC)
+		setNow(func() time.Time { return fixed })
+		defer setNow(time.Now)
+
+		todoPath, notesDir := writeTestTodo(t, []Task{
+			{ID: "TSK-001", Priority: "med", Opened: "2026-08-01", Status: StatusDone, Summary: "done"},
+		})
+		if err := os.MkdirAll(notesDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		// A work-order note carries no synopsis, so archiving it must assert one.
+		if err := os.WriteFile(filepath.Join(notesDir, "TSK-001.md"), []byte("---\nkind: work-order\n---\n\nbody"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		archiveDir := archiveDirOf(notesDir)
+		if _, err := Archive(ArchiveOptions{TodoPath: todoPath, NotesDir: notesDir, ArchiveDir: archiveDir, Ref: "1"}); err == nil {
+			t.Fatal("archive without a synopsis: expected error")
+		}
+		if len(readTasks(t, todoPath)) != 1 {
+			t.Error("failed archive removed the task line")
+		}
+		if _, err := os.Stat(filepath.Join(notesDir, "TSK-001.md")); err != nil {
+			t.Errorf("failed archive removed the note: %v", err)
+		}
+
+		res, err := Archive(ArchiveOptions{
+			TodoPath:   todoPath,
+			NotesDir:   notesDir,
+			ArchiveDir: archiveDir,
+			Ref:        "1",
+			Synopsis:   "why it matters",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.Synopsis != "why it matters" {
+			t.Errorf("synopsis = %q, want why it matters", res.Synopsis)
+		}
+	})
+}
+
+func TestListArchived(t *testing.T) {
+	dir := t.TempDir()
+	archiveDir := filepath.Join(dir, ".todo", "archive")
+
+	// A missing directory means nothing has been archived yet.
+	notes, err := ListArchived(archiveDir)
+	if err != nil {
+		t.Fatalf("ListArchived(missing): %v", err)
+	}
+	if len(notes) != 0 {
+		t.Errorf("notes = %v, want none", notes)
+	}
+
+	if err := os.MkdirAll(archiveDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{
+		"b.md":       "---\nkind: record\nsynopsis: bee\n---\n\nbody\n",
+		"a.md":       "---\ncategory: areas\nsynopsis: ay\n---\n\nbody\n",
+		"ignore.txt": "not a note",
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(archiveDir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	notes, err = ListArchived(archiveDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(notes) != 2 {
+		t.Fatalf("notes = %v, want 2", notes)
+	}
+	if notes[0].Name != "a.md" || notes[0].Synopsis != "ay" {
+		t.Errorf("notes[0] = %+v, want a.md/ay", notes[0])
+	}
+	if notes[1].Name != "b.md" || notes[1].Synopsis != "bee" {
+		t.Errorf("notes[1] = %+v, want b.md/bee", notes[1])
 	}
 }

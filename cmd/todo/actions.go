@@ -20,9 +20,10 @@ import (
 
 // appConfig carries the resolved per-run dependencies for all commands.
 type appConfig struct {
-	repoRoot string
-	todoPath string
-	notesDir string
+	repoRoot   string
+	todoPath   string
+	notesDir   string
+	archiveDir string
 }
 
 // addOptions carries the flag values for the add command.
@@ -43,10 +44,17 @@ type addOptions struct {
 type listOptions struct {
 	asJSON      bool
 	all         bool
+	archive     bool
 	state       string
 	stale       int
 	sort        string
 	sortReverse bool
+}
+
+// archiveOptions carries the flag values for the archive command.
+type archiveOptions struct {
+	name     string
+	synopsis string
 }
 
 // completeOptions carries the flag values for the complete command.
@@ -276,6 +284,122 @@ func runList(cmd *cli.Command, cfg appConfig, opts listOptions) error {
 		return exitError(err)
 	}
 	return nil
+}
+
+// archiveEntry augments an archived note with cross-repo metadata for output.
+type archiveEntry struct {
+	todo.ArchivedNote
+	repoPath    string
+	repoProject string
+}
+
+// runListArchived renders the compact archived-notes view. It scans each target
+// repo's .todo/archive directory rather than task lines, so archived content
+// never appears in the default list.
+func runListArchived(cmd *cli.Command, cfg appConfig, opts listOptions) error {
+	out := outWriter(cmd)
+	errOut := cmd.Root().ErrWriter
+	if errOut == nil {
+		errOut = os.Stderr
+	}
+
+	var entries []archiveEntry
+	collect := func(root, project string, includeRepo bool) {
+		archiveDir := filepath.Join(root, ".todo", "archive")
+		notes, err := todo.ListArchived(archiveDir)
+		if err != nil {
+			_, _ = fmt.Fprintf(errOut, "warning: cannot read %s: %v\n", archiveDir, err)
+			return
+		}
+		for _, n := range notes {
+			e := archiveEntry{ArchivedNote: n, repoProject: project}
+			if includeRepo {
+				e.repoPath = root
+			}
+			entries = append(entries, e)
+		}
+	}
+
+	if opts.all {
+		reg, err := registry.Load(registryPath())
+		if err != nil {
+			return exitError(err)
+		}
+		for _, e := range reg {
+			if _, err := os.Stat(e.Path); err != nil {
+				_, _ = fmt.Fprintf(errOut, "warning: skipping missing repo %s: %v\n", e.Path, err)
+				continue
+			}
+			collect(e.Path, projectFromEntry(e), true)
+		}
+	} else {
+		collect(cfg.repoRoot, "", false)
+	}
+
+	if opts.asJSON {
+		return writeJSONArchive(out, entries)
+	}
+
+	if len(entries) == 0 {
+		_, _ = fmt.Fprintln(out, "No archived notes found.")
+		return nil
+	}
+
+	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+	if opts.all {
+		_, _ = fmt.Fprintln(w, "NAME\tREPO\tSYNOPSIS")
+		_, _ = fmt.Fprintln(w, "----\t----\t--------")
+	} else {
+		_, _ = fmt.Fprintln(w, "NAME\tSYNOPSIS")
+		_, _ = fmt.Fprintln(w, "----\t--------")
+	}
+	for _, e := range entries {
+		syn := e.Synopsis
+		if syn == "" {
+			syn = "-"
+		}
+		if opts.all {
+			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\n", e.Name, e.repoProject, syn)
+		} else {
+			_, _ = fmt.Fprintf(w, "%s\t%s\n", e.Name, syn)
+		}
+	}
+	if err := w.Flush(); err != nil {
+		return exitError(err)
+	}
+	return nil
+}
+
+// jsonArchived is the machine-readable representation of one archived note.
+type jsonArchived struct {
+	Name        string `json:"name"`
+	Path        string `json:"path"`
+	Synopsis    string `json:"synopsis"`
+	RepoPath    string `json:"repo_path,omitempty"`
+	RepoProject string `json:"repo_project,omitempty"`
+}
+
+// jsonArchiveEnvelope wraps the list --archive --json output in a versioned
+// contract so consumers can detect schema drift.
+type jsonArchiveEnvelope struct {
+	SchemaVersion int            `json:"schema_version"`
+	Archived      []jsonArchived `json:"archived"`
+}
+
+func writeJSONArchive(out io.Writer, entries []archiveEntry) error {
+	items := make([]jsonArchived, 0, len(entries))
+	for _, e := range entries {
+		items = append(items, jsonArchived{
+			Name:        e.Name,
+			Path:        e.Path,
+			Synopsis:    e.Synopsis,
+			RepoPath:    e.repoPath,
+			RepoProject: e.repoProject,
+		})
+	}
+	enc := json.NewEncoder(out)
+	enc.SetIndent("", "  ")
+	return enc.Encode(jsonArchiveEnvelope{SchemaVersion: 1, Archived: items})
 }
 
 // listedTask augments a task with optional cross-repo metadata for list output.
@@ -512,6 +636,29 @@ func runRemove(cmd *cli.Command, cfg appConfig, opts removeOptions) error {
 	return nil
 }
 
+// runArchive retires a completed task into the repo-local .todo/archive.
+func runArchive(cmd *cli.Command, cfg appConfig, opts archiveOptions) error {
+	ref, err := requireTaskRef(cmd)
+	if err != nil {
+		return exitError(err)
+	}
+	res, err := todo.Archive(todo.ArchiveOptions{
+		TodoPath:   cfg.todoPath,
+		NotesDir:   cfg.notesDir,
+		ArchiveDir: cfg.archiveDir,
+		Ref:        ref,
+		Name:       opts.name,
+		Synopsis:   opts.synopsis,
+	})
+	if err != nil {
+		return exitError(err)
+	}
+	out := outWriter(cmd)
+	_, _ = fmt.Fprintln(out, res.Line)
+	_, _ = fmt.Fprintf(out, "archived: %s\n", res.ArchivePath)
+	return nil
+}
+
 func runComplete(cmd *cli.Command, cfg appConfig, opts completeOptions) error {
 	ref, err := requireTaskRef(cmd)
 	if err != nil {
@@ -576,7 +723,7 @@ func runClear(cmd *cli.Command, cfg appConfig, opts clearOptions) error {
 			return exitError(err)
 		}
 
-		if len(res.RemovedClear) == 0 && len(res.RemovedWorkOrder) == 0 && len(res.Parked) == 0 && len(res.Float) == 0 {
+		if len(res.RemovedClear) == 0 && len(res.RemovedWorkOrder) == 0 && len(res.Parked) == 0 && len(res.Recorded) == 0 && len(res.Float) == 0 {
 			if !opts.all {
 				_, _ = fmt.Fprintln(out, "No completed tasks to clear.")
 				printed = true
@@ -599,6 +746,10 @@ func runClear(cmd *cli.Command, cfg appConfig, opts clearOptions) error {
 		}
 		if len(res.Parked) > 0 {
 			_, _ = fmt.Fprintf(out, "%sparked: %s\n", prefix, strings.Join(res.Parked, ", "))
+			printed = true
+		}
+		if len(res.Recorded) > 0 {
+			_, _ = fmt.Fprintf(out, "%spreserved record: %s\n", prefix, strings.Join(res.Recorded, ", "))
 			printed = true
 		}
 		if len(res.Float) > 0 {

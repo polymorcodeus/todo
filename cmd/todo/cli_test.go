@@ -965,3 +965,140 @@ func TestDoctorReportsAndFixes(t *testing.T) {
 		t.Errorf("fixed paths = %v", paths)
 	}
 }
+
+func TestArchiveCommand(t *testing.T) {
+	setupGitRepo(t)
+
+	if _, _, err := runApp(t, []string{"init"}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if _, _, err := runApp(t, []string{"add", "-n", "--note-content", "the detail body", "retire this"}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if _, _, err := runApp(t, []string{"pickup", "TSK-001"}); err != nil {
+		t.Fatalf("pickup: %v", err)
+	}
+	if _, _, err := runApp(t, []string{"complete", "TSK-001"}); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+
+	out, _, err := runApp(t, []string{"archive", "TSK-001"})
+	if err != nil {
+		t.Fatalf("archive: %v", err)
+	}
+	if !strings.Contains(out, "archived: ") || !strings.Contains(out, ".todo/archive/TSK-001.md") {
+		t.Errorf("archive output = %q, want archived path", out)
+	}
+
+	data, err := os.ReadFile(".todo/archive/TSK-001.md")
+	if err != nil {
+		t.Fatalf("read archived note: %v", err)
+	}
+	for _, want := range []string{"kind: record", "synopsis: retire this", "the detail body"} {
+		if !strings.Contains(string(data), want) {
+			t.Errorf("archived note missing %q:\n%s", want, string(data))
+		}
+	}
+
+	// The line and the source note entry are gone.
+	if _, err := os.Stat(".todo/notes/TSK-001.md"); !os.IsNotExist(err) {
+		t.Errorf("source note still present: %v", err)
+	}
+	out, _, err = runApp(t, []string{"list"})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if strings.Contains(out, "retire this") {
+		t.Errorf("default list still shows the archived task: %q", out)
+	}
+
+	// The compact archived view surfaces it.
+	out, _, err = runApp(t, []string{"list", "--archive"})
+	if err != nil {
+		t.Fatalf("list --archive: %v", err)
+	}
+	if !strings.Contains(out, "TSK-001.md") || !strings.Contains(out, "retire this") {
+		t.Errorf("list --archive output = %q", out)
+	}
+}
+
+func TestListArchiveJSON(t *testing.T) {
+	setupGitRepo(t)
+
+	if _, _, err := runApp(t, []string{"init"}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+
+	// Nothing archived yet: an empty envelope, not an error.
+	out, _, err := runApp(t, []string{"list", "--archive", "--json"})
+	if err != nil {
+		t.Fatalf("list --archive --json: %v", err)
+	}
+	var empty jsonArchiveEnvelope
+	if err := json.Unmarshal([]byte(out), &empty); err != nil {
+		t.Fatalf("parse empty archive json: %v", err)
+	}
+	if empty.SchemaVersion != 1 || len(empty.Archived) != 0 {
+		t.Errorf("empty envelope = %+v", empty)
+	}
+
+	if _, _, err := runApp(t, []string{"add", "-n", "--note-content", "body", "archive me"}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if _, _, err := runApp(t, []string{"pickup", "TSK-001"}); err != nil {
+		t.Fatalf("pickup: %v", err)
+	}
+	if _, _, err := runApp(t, []string{"complete", "TSK-001"}); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	if _, _, err := runApp(t, []string{"archive", "TSK-001"}); err != nil {
+		t.Fatalf("archive: %v", err)
+	}
+
+	out, _, err = runApp(t, []string{"list", "--archive", "--json"})
+	if err != nil {
+		t.Fatalf("list --archive --json: %v", err)
+	}
+	var env jsonArchiveEnvelope
+	if err := json.Unmarshal([]byte(out), &env); err != nil {
+		t.Fatalf("parse archive json: %v", err)
+	}
+	if env.SchemaVersion != 1 || len(env.Archived) != 1 {
+		t.Fatalf("envelope = %+v", env)
+	}
+	if env.Archived[0].Name != "TSK-001.md" || env.Archived[0].Synopsis != "archive me" {
+		t.Errorf("archived entry = %+v", env.Archived[0])
+	}
+}
+
+func TestArchiveCommandRequiresSynopsis(t *testing.T) {
+	setupGitRepo(t)
+
+	if _, _, err := runApp(t, []string{"init"}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if _, _, err := runApp(t, []string{"add", "-n", "--kind", "work-order", "--note-content", "body", "work order"}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if _, _, err := runApp(t, []string{"pickup", "TSK-001"}); err != nil {
+		t.Fatalf("pickup: %v", err)
+	}
+	if _, _, err := runApp(t, []string{"complete", "TSK-001"}); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+
+	if _, _, err := runApp(t, []string{"archive", "TSK-001"}); err == nil {
+		t.Fatal("archive without a synopsis: expected error")
+	}
+
+	if _, _, err := runApp(t, []string{"archive", "TSK-001", "--synopsis", "why it matters", "--name", "retired-why"}); err != nil {
+		t.Fatalf("archive --synopsis: %v", err)
+	}
+	data, err := os.ReadFile(".todo/archive/retired-why.md")
+	if err != nil {
+		t.Fatalf("read archived note: %v", err)
+	}
+	if !strings.Contains(string(data), "synopsis: why it matters") {
+		t.Errorf("archived note missing asserted synopsis:\n%s", string(data))
+	}
+}
